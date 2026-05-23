@@ -6,7 +6,6 @@ Usa CDP para conectar ao Chrome real do usuário.
 """
 
 import threading
-import time
 
 import customtkinter as ctk
 
@@ -192,12 +191,8 @@ class App(ctk.CTk):
             # Abrir Chrome com porta de debug
             self._chrome_process = launch_chrome_with_debug(on_log=self._safe_log)
 
-            self._safe_log("Chrome aberto com seu perfil real!")
             self._safe_log("Se já estiver logado, clique em 'Iniciar Follow'.")
             self._safe_log("Se não, faça login e depois clique em 'Iniciar Follow'.")
-
-            # Aguardar Chrome iniciar completamente
-            time.sleep(8)
 
             # Tentar conectar via CDP
             try:

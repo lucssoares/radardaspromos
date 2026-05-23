@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.request
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -85,6 +86,23 @@ def kill_chrome_processes() -> None:
         pass
 
 
+def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:
+    """Espera a porta CDP ficar disponível."""
+    log = on_log or (lambda msg: None)
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            url = f"http://127.0.0.1:{port}/json/version"
+            req = urllib.request.urlopen(url, timeout=2)
+            req.close()
+            log(f"Porta CDP {port} respondendo!")
+            return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
 def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
     """Abre o Chrome com o perfil real do usuário e porta de debug ativa."""
     log = on_log or (lambda msg: None)
@@ -120,6 +138,14 @@ def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+    # Aguardar porta CDP ficar disponível
+    log("Aguardando porta de debug ficar pronta...")
+    if _wait_for_cdp_port(CDP_PORT, timeout=30, on_log=log):
+        log("Chrome pronto para conexão!")
+    else:
+        log("AVISO: Porta de debug não respondeu. A conexão pode falhar.")
+
     return process
 
 
@@ -163,21 +189,33 @@ class InstagramBot:
 
     # ── Conectar ao Chrome via CDP ───────────────────────────────────────
 
-    def connect_to_chrome(self, pw: Playwright) -> Page:
-        """Conecta ao Chrome já aberto via CDP."""
+    def connect_to_chrome(self, pw: Playwright, max_retries: int = 3) -> Page:
+        """Conecta ao Chrome já aberto via CDP, com retries."""
         self._playwright = pw
 
-        self._log("Conectando ao Chrome via CDP...")
-        self._browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
-        self._context = self._browser.contexts[0]
+        for attempt in range(1, max_retries + 1):
+            try:
+                self._log(f"Conectando ao Chrome via CDP (tentativa {attempt})...")
+                self._browser = pw.chromium.connect_over_cdp(
+                    f"http://127.0.0.1:{CDP_PORT}"
+                )
+                self._context = self._browser.contexts[0]
 
-        if self._context.pages:
-            self._page = self._context.pages[0]
-        else:
-            self._page = self._context.new_page()
+                if self._context.pages:
+                    self._page = self._context.pages[0]
+                else:
+                    self._page = self._context.new_page()
 
-        self._log("Conectado ao Chrome com sucesso!")
-        return self._page
+                self._log("Conectado ao Chrome com sucesso!")
+                return self._page
+
+            except Exception as exc:
+                self._log(f"Tentativa {attempt} falhou: {exc}")
+                if attempt < max_retries:
+                    self._log("Aguardando antes de tentar novamente...")
+                    time.sleep(5)
+                else:
+                    raise
 
     def close_browser(self) -> None:
         if self._browser:
