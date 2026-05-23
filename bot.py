@@ -1,9 +1,16 @@
-"""Lógica do bot de automação do Instagram usando Playwright com Chrome real."""
+"""Lógica do bot de automação do Instagram via CDP (Chrome DevTools Protocol).
+
+Conecta ao Chrome real do usuário aberto com --remote-debugging-port.
+O Instagram não detecta automação porque é literalmente o Chrome normal.
+"""
 
 import logging
 import os
+import platform
 import random
 import re
+import shutil
+import subprocess
 import time
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright
@@ -11,8 +18,60 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 logger = logging.getLogger("instabot")
 
-# Pasta para salvar dados do navegador (cookies, sessão, etc.)
-USER_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_data")
+CDP_PORT = 9222
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_profile")
+
+
+def _find_chrome() -> str:
+    """Encontra o executável do Chrome no sistema."""
+    if platform.system() == "Windows":
+        candidates = [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(
+                r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+            ),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+    elif platform.system() == "Darwin":
+        mac_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        if os.path.isfile(mac_path):
+            return mac_path
+    else:
+        found = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+        if found:
+            return found
+
+    return "chrome"
+
+
+def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
+    """Abre o Chrome com porta de debug ativa e perfil separado."""
+    log = on_log or (lambda msg: None)
+    chrome_path = _find_chrome()
+    log(f"Chrome encontrado: {chrome_path}")
+
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+
+    cmd = [
+        chrome_path,
+        f"--remote-debugging-port={CDP_PORT}",
+        f"--user-data-dir={PROFILE_DIR}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--start-maximized",
+        "https://www.instagram.com/",
+    ]
+
+    log("Abrindo Chrome com debug ativo...")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return process
 
 
 class InstagramBot:
@@ -53,55 +112,37 @@ class InstagramBot:
         delay = random.uniform(lo, hi)
         time.sleep(delay)
 
-    # ── Browser lifecycle ────────────────────────────────────────────────
+    # ── Conectar ao Chrome via CDP ───────────────────────────────────────
 
-    def start_browser(self, pw: Playwright) -> Page:
-        """Abre o Chrome real instalado no computador (channel='chrome')."""
+    def connect_to_chrome(self, pw: Playwright) -> Page:
+        """Conecta ao Chrome já aberto via CDP."""
         self._playwright = pw
 
-        os.makedirs(USER_DATA_DIR, exist_ok=True)
-
-        self._context = pw.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
-            channel="chrome",
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-            locale="pt-BR",
-            timezone_id="America/Sao_Paulo",
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-infobars",
-                "--window-size=1280,800",
-            ],
-            ignore_default_args=["--enable-automation"],
-        )
+        self._log("Conectando ao Chrome via CDP...")
+        self._browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
+        self._context = self._browser.contexts[0]
 
         if self._context.pages:
             self._page = self._context.pages[0]
         else:
             self._page = self._context.new_page()
 
-        # Esconder flag webdriver
-        self._page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
+        self._log("Conectado ao Chrome com sucesso!")
         return self._page
 
     def close_browser(self) -> None:
-        if self._context:
+        if self._browser:
             try:
-                self._context.close()
+                self._browser.close()
             except Exception:
                 pass
+            self._browser = None
             self._context = None
-        self._browser = None
 
-    # ── Login manual ─────────────────────────────────────────────────────
+    # ── Login ────────────────────────────────────────────────────────────
 
-    def open_login_page(self) -> None:
-        self._log("Abrindo Instagram no Chrome...")
+    def navigate_to_instagram(self) -> None:
+        self._log("Navegando para Instagram...")
         self._page.goto(
             "https://www.instagram.com/",
             wait_until="domcontentloaded",
@@ -117,17 +158,30 @@ class InstagramBot:
                 return False
             try:
                 url = self._page.url
-                # Detectar que saiu da tela de login
                 if "instagram.com" in url and "/accounts/login" not in url:
-                    # Verificar se realmente está logado checando elementos da página
-                    self._delay(3, 5)
-                    self._dismiss_popups()
-                    self._log("Login detectado com sucesso!")
-                    return True
+                    # Checar se há elementos de usuário logado
+                    nav = self._page.locator("nav")
+                    if nav.count() > 0:
+                        self._delay(2, 3)
+                        self._dismiss_popups()
+                        self._log("Login detectado com sucesso!")
+                        return True
             except Exception:
                 pass
             time.sleep(2)
         self._log("Tempo limite para login atingido.")
+        return False
+
+    def is_already_logged_in(self) -> bool:
+        """Verifica se já está logado (sessão salva)."""
+        try:
+            url = self._page.url
+            if "instagram.com" in url and "/accounts/login" not in url:
+                nav = self._page.locator("nav")
+                if nav.count() > 0:
+                    return True
+        except Exception:
+            pass
         return False
 
     def _dismiss_popups(self) -> None:
@@ -327,7 +381,8 @@ class InstagramBot:
                     follow_btn.first.click()
                     stats["followed"] += 1
                     self._log(
-                        f"[{stats['followed']}/{self.max_follows}] Seguindo @{username}!"
+                        f"[{stats['followed']}/{self.max_follows}] "
+                        f"Seguindo @{username}!"
                     )
                     self._delay()
                     return True

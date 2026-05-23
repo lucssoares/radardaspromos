@@ -2,13 +2,15 @@
 Instagram Auto-Follow — Aplicativo Desktop.
 
 Interface gráfica para o bot de automação de follow no Instagram.
+Usa CDP para conectar ao Chrome real do usuário.
 """
 
 import threading
+import time
 
 import customtkinter as ctk
 
-from bot import InstagramBot
+from bot import InstagramBot, launch_chrome_with_debug
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -28,6 +30,7 @@ class App(ctk.CTk):
 
         self._bot: InstagramBot | None = None
         self._thread: threading.Thread | None = None
+        self._chrome_process = None
         self._running = False
 
         self._build_ui()
@@ -35,7 +38,6 @@ class App(ctk.CTk):
     # ── UI ────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        # Título
         title = ctk.CTkLabel(
             self,
             text="Instagram Auto-Follow Bot",
@@ -55,7 +57,6 @@ class App(ctk.CTk):
         config_frame = ctk.CTkFrame(self)
         config_frame.pack(padx=20, pady=(0, 10), fill="x")
 
-        # Perfil alvo
         ctk.CTkLabel(
             config_frame,
             text="Perfil alvo (sem @):",
@@ -67,7 +68,6 @@ class App(ctk.CTk):
         )
         self.target_entry.grid(row=0, column=1, padx=12, pady=(12, 4), sticky="w")
 
-        # Máximo de follows
         ctk.CTkLabel(
             config_frame,
             text="Máximo de follows:",
@@ -80,7 +80,6 @@ class App(ctk.CTk):
         self.max_follows_entry.insert(0, "20")
         self.max_follows_entry.grid(row=1, column=1, padx=12, pady=4, sticky="w")
 
-        # Delay
         ctk.CTkLabel(
             config_frame,
             text="Delay (seg):",
@@ -100,7 +99,6 @@ class App(ctk.CTk):
         self.max_delay_entry.insert(0, "8")
         self.max_delay_entry.pack(side="left")
 
-        # Filtro info
         filter_label = ctk.CTkLabel(
             config_frame,
             text="Filtro: seguindo > seguidores (ativado automaticamente)",
@@ -117,9 +115,9 @@ class App(ctk.CTk):
 
         self.login_btn = ctk.CTkButton(
             btn_frame,
-            text="1. Fazer Login no Instagram",
-            command=self._on_login,
-            width=220,
+            text="1. Abrir Chrome e Logar",
+            command=self._on_open_chrome,
+            width=200,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
         )
@@ -184,40 +182,55 @@ class App(ctk.CTk):
 
         self.after(0, _update)
 
-    def _on_login(self) -> None:
+    def _on_open_chrome(self) -> None:
+        """Abre o Chrome com debug e aguarda login."""
         self.login_btn.configure(state="disabled")
-        self._safe_log("Abrindo navegador para login...")
+        self._safe_log("IMPORTANTE: Feche todas as janelas do Chrome antes!")
+        self._safe_log("Abrindo Chrome...")
 
-        def _login_thread():
-            from playwright.sync_api import sync_playwright as start_pw
+        def _thread():
+            # Abrir Chrome com porta de debug
+            self._chrome_process = launch_chrome_with_debug(on_log=self._safe_log)
 
-            self._pw = start_pw().start()
-            self._bot = InstagramBot(
-                max_follows=self._get_max_follows(),
-                min_delay=self._get_min_delay(),
-                max_delay=self._get_max_delay(),
-                on_log=self._safe_log,
-                on_progress=self._safe_progress,
-            )
-            self._bot.start_browser(self._pw)
-            self._bot.open_login_page()
+            self._safe_log("Chrome aberto! Faça login no Instagram.")
+            self._safe_log("Depois de logar, clique em 'Iniciar Follow'.")
 
-            self._safe_log(
-                "Navegador aberto! Faça login no Instagram e clique 'Iniciar Follow'."
-            )
+            # Aguardar Chrome iniciar
+            time.sleep(5)
 
-            # Aguardar login em background
-            def _wait():
-                if self._bot.wait_for_login(timeout_sec=300):
+            # Tentar conectar via CDP
+            try:
+                from playwright.sync_api import sync_playwright as start_pw
+
+                self._pw = start_pw().start()
+                self._bot = InstagramBot(
+                    max_follows=self._get_max_follows(),
+                    min_delay=self._get_min_delay(),
+                    max_delay=self._get_max_delay(),
+                    on_log=self._safe_log,
+                    on_progress=self._safe_progress,
+                )
+                self._bot.connect_to_chrome(self._pw)
+
+                # Verificar se já está logado (sessão anterior salva)
+                if self._bot.is_already_logged_in():
+                    self._safe_log("Sessão anterior detectada! Já está logado.")
                     self.after(0, lambda: self.start_btn.configure(state="normal"))
-                    self._safe_log("Login confirmado! Clique em 'Iniciar Follow'.")
                 else:
-                    self._safe_log("Login não detectado. Tente novamente.")
-                    self.after(0, lambda: self.login_btn.configure(state="normal"))
+                    self._safe_log(
+                        "Faça login no Chrome e clique 'Iniciar Follow' quando pronto."
+                    )
+                    self.after(0, lambda: self.start_btn.configure(state="normal"))
 
-            threading.Thread(target=_wait, daemon=True).start()
+            except Exception as exc:
+                self._safe_log(f"Erro ao conectar: {exc}")
+                self._safe_log(
+                    "Certifique-se de FECHAR todas as janelas do Chrome "
+                    "antes de clicar em 'Abrir Chrome'."
+                )
+                self.after(0, lambda: self.login_btn.configure(state="normal"))
 
-        threading.Thread(target=_login_thread, daemon=True).start()
+        threading.Thread(target=_thread, daemon=True).start()
 
     def _on_start(self) -> None:
         target = self.target_entry.get().strip().lstrip("@").strip("/")
@@ -225,15 +238,15 @@ class App(ctk.CTk):
             self._append_log("Preencha o perfil alvo!")
             return
 
-        # Extrair username se for URL
         if "instagram.com/" in target:
             parts = target.split("instagram.com/")
             target = parts[-1].strip("/").split("/")[0]
 
-        self._bot.max_follows = self._get_max_follows()
-        self._bot.min_delay = self._get_min_delay()
-        self._bot.max_delay = self._get_max_delay()
-        self._bot._stop_requested = False
+        if self._bot:
+            self._bot.max_follows = self._get_max_follows()
+            self._bot.min_delay = self._get_min_delay()
+            self._bot.max_delay = self._get_max_delay()
+            self._bot._stop_requested = False
 
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")

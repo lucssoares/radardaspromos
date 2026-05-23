@@ -11,3 +11,4 @@ build/
 dist/
 *.spec
 browser_data/
+chrome_profile/
