@@ -12,3 +12,4 @@ dist/
 *.spec
 browser_data/
 chrome_profile/
+chrome_bot_profile/

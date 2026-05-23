@@ -184,7 +184,7 @@ class App(ctk.CTk):
     def _on_open_chrome(self) -> None:
         """Abre o Chrome com debug e aguarda login."""
         self.login_btn.configure(state="disabled")
-        self._safe_log("O Chrome será fechado e reaberto com seu perfil real...")
+        self._safe_log("Abrindo Chrome do bot (pode manter seu Chrome aberto)...")
         self._safe_log("Aguarde...")
 
         def _thread():

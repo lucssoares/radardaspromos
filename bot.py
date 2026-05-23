@@ -47,43 +47,10 @@ def _find_chrome() -> str:
     return "chrome"
 
 
-def _find_chrome_user_data_dir() -> str:
-    """Encontra o diretório de perfil padrão do Chrome do usuário."""
-    if platform.system() == "Windows":
-        path = os.path.expandvars(r"%LocalAppData%\Google\Chrome\User Data")
-        if os.path.isdir(path):
-            return path
-    elif platform.system() == "Darwin":
-        path = os.path.expanduser("~/Library/Application Support/Google/Chrome")
-        if os.path.isdir(path):
-            return path
-    else:
-        path = os.path.expanduser("~/.config/google-chrome")
-        if os.path.isdir(path):
-            return path
-    return ""
-
-
-def kill_chrome_processes() -> None:
-    """Fecha todos os processos do Chrome para liberar o perfil."""
-    try:
-        if platform.system() == "Windows":
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "chrome.exe"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
-            subprocess.run(
-                ["pkill", "-f", "chrome"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        import time
-
-        time.sleep(2)
-    except Exception:
-        pass
+# Perfil separado para o bot (evita conflito com Chrome já aberto)
+BOT_PROFILE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "chrome_bot_profile"
+)
 
 
 def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:
@@ -104,35 +71,31 @@ def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:
 
 
 def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
-    """Abre o Chrome com o perfil real do usuário e porta de debug ativa."""
+    """Abre o Chrome com perfil separado e porta de debug ativa.
+
+    Usa um perfil dedicado para o bot (chrome_bot_profile/) em vez do
+    perfil real do Chrome. Isso evita conflito com o Chrome já aberto
+    e garante que a porta de debug funcione.
+    O login é salvo neste perfil — só precisa logar uma vez.
+    """
     log = on_log or (lambda msg: None)
     chrome_path = _find_chrome()
     log(f"Chrome encontrado: {chrome_path}")
 
-    user_data_dir = _find_chrome_user_data_dir()
-    if user_data_dir:
-        log(f"Usando perfil real do Chrome: {user_data_dir}")
-    else:
-        log("Perfil do Chrome não encontrado. Usando perfil padrão.")
-
-    # Fechar Chrome existente para liberar o perfil
-    log("Fechando Chrome existente...")
-    kill_chrome_processes()
+    os.makedirs(BOT_PROFILE_DIR, exist_ok=True)
+    log(f"Usando perfil do bot: {BOT_PROFILE_DIR}")
 
     cmd = [
         chrome_path,
         f"--remote-debugging-port={CDP_PORT}",
+        f"--user-data-dir={BOT_PROFILE_DIR}",
         "--no-first-run",
         "--no-default-browser-check",
         "--start-maximized",
         "https://www.instagram.com/",
     ]
 
-    # Usar perfil real se encontrado
-    if user_data_dir:
-        cmd.insert(2, f"--user-data-dir={user_data_dir}")
-
-    log("Abrindo Chrome com seu perfil real...")
+    log("Abrindo Chrome (janela separada para o bot)...")
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
