@@ -5,6 +5,7 @@ Interface gráfica para o bot de automação de follow no Instagram.
 Usa CDP para conectar ao Chrome real do usuário.
 """
 
+import queue
 import threading
 
 import customtkinter as ctk
@@ -28,11 +29,35 @@ class App(ctk.CTk):
         self.resizable(False, False)
 
         self._bot: InstagramBot | None = None
-        self._thread: threading.Thread | None = None
         self._chrome_process = None
         self._running = False
 
+        # Fila de tarefas para a worker thread do Playwright
+        self._task_queue: queue.Queue = queue.Queue()
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker.start()
+
         self._build_ui()
+
+    # ── Worker thread (todas as operações Playwright aqui) ───────────────
+
+    def _worker_loop(self) -> None:
+        """Loop que executa tarefas na mesma thread (requerido pelo Playwright)."""
+        self._pw = None
+        while True:
+            task = self._task_queue.get()
+            if task is None:
+                break
+            try:
+                task()
+            except Exception as exc:
+                self._safe_log(f"Erro: {exc}")
+            finally:
+                self._task_queue.task_done()
+
+    def _submit_task(self, fn) -> None:
+        """Envia uma tarefa para a worker thread."""
+        self._task_queue.put(fn)
 
     # ── UI ────────────────────────────────────────────────────────────────
 
@@ -182,19 +207,15 @@ class App(ctk.CTk):
         self.after(0, _update)
 
     def _on_open_chrome(self) -> None:
-        """Abre o Chrome com debug e aguarda login."""
+        """Abre o Chrome com debug e conecta via CDP."""
         self.login_btn.configure(state="disabled")
         self._safe_log("Abrindo Chrome do bot (pode manter seu Chrome aberto)...")
-        self._safe_log("Aguarde...")
 
-        def _thread():
+        def _task():
             # Abrir Chrome com porta de debug
             self._chrome_process = launch_chrome_with_debug(on_log=self._safe_log)
 
-            self._safe_log("Se já estiver logado, clique em 'Iniciar Follow'.")
-            self._safe_log("Se não, faça login e depois clique em 'Iniciar Follow'.")
-
-            # Tentar conectar via CDP
+            # Conectar via CDP (na mesma thread que vai executar as ações)
             try:
                 from playwright.sync_api import sync_playwright as start_pw
 
@@ -208,15 +229,12 @@ class App(ctk.CTk):
                 )
                 self._bot.connect_to_chrome(self._pw)
 
-                # Verificar se já está logado (sessão anterior salva)
                 if self._bot.is_already_logged_in():
                     self._safe_log("Sessão anterior detectada! Já está logado.")
-                    self.after(0, lambda: self.start_btn.configure(state="normal"))
                 else:
-                    self._safe_log(
-                        "Faça login no Chrome e clique 'Iniciar Follow' quando pronto."
-                    )
-                    self.after(0, lambda: self.start_btn.configure(state="normal"))
+                    self._safe_log("Faça login no Instagram e clique 'Iniciar Follow'.")
+
+                self.after(0, lambda: self.start_btn.configure(state="normal"))
 
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
@@ -226,7 +244,7 @@ class App(ctk.CTk):
                 )
                 self.after(0, lambda: self.login_btn.configure(state="normal"))
 
-        threading.Thread(target=_thread, daemon=True).start()
+        self._submit_task(_task)
 
     def _on_start(self) -> None:
         target = self.target_entry.get().strip().lstrip("@").strip("/")
@@ -249,7 +267,7 @@ class App(ctk.CTk):
         self.login_btn.configure(state="disabled")
         self._running = True
 
-        def _run():
+        def _task():
             try:
                 if not self._bot.open_followers(target):
                     self._safe_log("Falha ao abrir seguidores. Verifique o perfil.")
@@ -271,8 +289,7 @@ class App(ctk.CTk):
                 self._running = False
                 self.after(0, self._reset_buttons)
 
-        self._thread = threading.Thread(target=_run, daemon=True)
-        self._thread.start()
+        self._submit_task(_task)
 
     def _on_stop(self) -> None:
         if self._bot:
@@ -314,6 +331,7 @@ class App(ctk.CTk):
                 self._pw.stop()
             except Exception:
                 pass
+        self._task_queue.put(None)
         super().destroy()
 
 
