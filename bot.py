@@ -1,4 +1,4 @@
-"""Lógica do bot de automação do Instagram usando Playwright com anti-detecção."""
+"""Lógica do bot de automação do Instagram usando Playwright com Chrome real."""
 
 import logging
 import os
@@ -8,7 +8,6 @@ import time
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
-from playwright_stealth import Stealth
 
 logger = logging.getLogger("instabot")
 
@@ -57,32 +56,25 @@ class InstagramBot:
     # ── Browser lifecycle ────────────────────────────────────────────────
 
     def start_browser(self, pw: Playwright) -> Page:
+        """Abre o Chrome real instalado no computador (channel='chrome')."""
         self._playwright = pw
 
         os.makedirs(USER_DATA_DIR, exist_ok=True)
 
         self._context = pw.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
+            channel="chrome",
             headless=False,
             viewport={"width": 1280, "height": 800},
             locale="pt-BR",
             timezone_id="America/Sao_Paulo",
-            geolocation={"latitude": -23.55, "longitude": -46.63},
-            permissions=["geolocation"],
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-infobars",
-                "--disable-dev-shm-usage",
-                "--disable-extensions",
                 "--window-size=1280,800",
             ],
             ignore_default_args=["--enable-automation"],
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
         )
 
         if self._context.pages:
@@ -90,11 +82,10 @@ class InstagramBot:
         else:
             self._page = self._context.new_page()
 
-        stealth = Stealth(
-            navigator_languages_override=("pt-BR", "pt"),
-            navigator_platform_override="Win32",
+        # Esconder flag webdriver
+        self._page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
-        stealth.apply_stealth_sync(self._page)
 
         return self._page
 
@@ -110,30 +101,32 @@ class InstagramBot:
     # ── Login manual ─────────────────────────────────────────────────────
 
     def open_login_page(self) -> None:
-        self._log("Abrindo página de login do Instagram...")
+        self._log("Abrindo Instagram no Chrome...")
         self._page.goto(
-            "https://www.instagram.com/accounts/login/",
+            "https://www.instagram.com/",
             wait_until="domcontentloaded",
             timeout=30000,
         )
 
     def wait_for_login(self, timeout_sec: int = 300) -> bool:
         """Espera o usuário fazer login manualmente. Retorna True se logado."""
-        self._log("Aguardando login manual (você tem 5 minutos)...")
+        self._log("Faça login no Instagram (você tem 5 minutos)...")
         start = time.time()
         while time.time() - start < timeout_sec:
             if self._stop_requested:
                 return False
             try:
                 url = self._page.url
-                if "/accounts/login" not in url and "instagram.com" in url:
-                    self._delay(2, 3)
+                # Detectar que saiu da tela de login
+                if "instagram.com" in url and "/accounts/login" not in url:
+                    # Verificar se realmente está logado checando elementos da página
+                    self._delay(3, 5)
                     self._dismiss_popups()
                     self._log("Login detectado com sucesso!")
                     return True
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(2)
         self._log("Tempo limite para login atingido.")
         return False
 
@@ -204,7 +197,6 @@ class InstagramBot:
     def _check_profile_filter(self, username: str) -> bool:
         """Abre o perfil em nova aba e verifica se seguindo > seguidores."""
         page2 = self._context.new_page()
-        Stealth().apply_stealth_sync(page2)
         try:
             page2.goto(
                 f"https://www.instagram.com/{username}/",
@@ -317,7 +309,6 @@ class InstagramBot:
     def _follow_single_user(self, username: str, stats: dict) -> bool:
         """Segue um único usuário pelo perfil dele."""
         page2 = self._context.new_page()
-        Stealth().apply_stealth_sync(page2)
         try:
             page2.goto(
                 f"https://www.instagram.com/{username}/",
