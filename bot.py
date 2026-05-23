@@ -19,7 +19,6 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 logger = logging.getLogger("instabot")
 
 CDP_PORT = 9222
-PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_profile")
 
 
 def _find_chrome() -> str:
@@ -47,25 +46,75 @@ def _find_chrome() -> str:
     return "chrome"
 
 
+def _find_chrome_user_data_dir() -> str:
+    """Encontra o diretório de perfil padrão do Chrome do usuário."""
+    if platform.system() == "Windows":
+        path = os.path.expandvars(r"%LocalAppData%\Google\Chrome\User Data")
+        if os.path.isdir(path):
+            return path
+    elif platform.system() == "Darwin":
+        path = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+        if os.path.isdir(path):
+            return path
+    else:
+        path = os.path.expanduser("~/.config/google-chrome")
+        if os.path.isdir(path):
+            return path
+    return ""
+
+
+def kill_chrome_processes() -> None:
+    """Fecha todos os processos do Chrome para liberar o perfil."""
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "chrome.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.run(
+                ["pkill", "-f", "chrome"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        import time
+
+        time.sleep(2)
+    except Exception:
+        pass
+
+
 def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
-    """Abre o Chrome com porta de debug ativa e perfil separado."""
+    """Abre o Chrome com o perfil real do usuário e porta de debug ativa."""
     log = on_log or (lambda msg: None)
     chrome_path = _find_chrome()
     log(f"Chrome encontrado: {chrome_path}")
 
-    os.makedirs(PROFILE_DIR, exist_ok=True)
+    user_data_dir = _find_chrome_user_data_dir()
+    if user_data_dir:
+        log(f"Usando perfil real do Chrome: {user_data_dir}")
+    else:
+        log("Perfil do Chrome não encontrado. Usando perfil padrão.")
+
+    # Fechar Chrome existente para liberar o perfil
+    log("Fechando Chrome existente...")
+    kill_chrome_processes()
 
     cmd = [
         chrome_path,
         f"--remote-debugging-port={CDP_PORT}",
-        f"--user-data-dir={PROFILE_DIR}",
         "--no-first-run",
         "--no-default-browser-check",
         "--start-maximized",
         "https://www.instagram.com/",
     ]
 
-    log("Abrindo Chrome com debug ativo...")
+    # Usar perfil real se encontrado
+    if user_data_dir:
+        cmd.insert(2, f"--user-data-dir={user_data_dir}")
+
+    log("Abrindo Chrome com seu perfil real...")
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,

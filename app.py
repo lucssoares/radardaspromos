@@ -185,18 +185,19 @@ class App(ctk.CTk):
     def _on_open_chrome(self) -> None:
         """Abre o Chrome com debug e aguarda login."""
         self.login_btn.configure(state="disabled")
-        self._safe_log("IMPORTANTE: Feche todas as janelas do Chrome antes!")
-        self._safe_log("Abrindo Chrome...")
+        self._safe_log("O Chrome será fechado e reaberto com seu perfil real...")
+        self._safe_log("Aguarde...")
 
         def _thread():
             # Abrir Chrome com porta de debug
             self._chrome_process = launch_chrome_with_debug(on_log=self._safe_log)
 
-            self._safe_log("Chrome aberto! Faça login no Instagram.")
-            self._safe_log("Depois de logar, clique em 'Iniciar Follow'.")
+            self._safe_log("Chrome aberto com seu perfil real!")
+            self._safe_log("Se já estiver logado, clique em 'Iniciar Follow'.")
+            self._safe_log("Se não, faça login e depois clique em 'Iniciar Follow'.")
 
-            # Aguardar Chrome iniciar
-            time.sleep(5)
+            # Aguardar Chrome iniciar completamente
+            time.sleep(8)
 
             # Tentar conectar via CDP
             try:
@@ -225,8 +226,8 @@ class App(ctk.CTk):
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
                 self._safe_log(
-                    "Certifique-se de FECHAR todas as janelas do Chrome "
-                    "antes de clicar em 'Abrir Chrome'."
+                    "Tente novamente. Se o erro persistir, feche o Chrome "
+                    "manualmente e clique no botão de novo."
                 )
                 self.after(0, lambda: self.login_btn.configure(state="normal"))
 
