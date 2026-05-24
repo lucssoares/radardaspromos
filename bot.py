@@ -347,18 +347,46 @@ class InstagramBot:
     # ── Checar perfil (filtro seguindo > seguidores) ─────────────────────
 
     def _parse_count(self, text: str) -> int:
-        """Converte textos como '1,234' ou '12.3K' ou '1.2M' em int."""
-        text = text.strip().replace(",", "").replace(".", "")
-        match = re.search(r"([\d.]+)\s*([KkMm]?)", text)
-        if not match:
-            return 0
-        num = float(match.group(1))
-        suffix = match.group(2).upper()
-        if suffix == "K":
-            num *= 1000
-        elif suffix == "M":
-            num *= 1_000_000
-        return int(num)
+        """Converte textos como '1,234', '12.3K', '1.2M', '1.234' em int."""
+        text = text.strip()
+        # Primeiro tenta com sufixo K/M (ex: "12.3K", "1,5M")
+        match = re.search(r"([\d.,]+)\s*([KkMm])", text)
+        if match:
+            num_str = match.group(1).replace(",", ".")
+            num = float(num_str)
+            suffix = match.group(2).upper()
+            if suffix == "K":
+                num *= 1000
+            elif suffix == "M":
+                num *= 1_000_000
+            return int(num)
+        # Sem sufixo: número puro (ex: "1,234" ou "1.234" como separador de milhar)
+        match = re.search(r"[\d.,]+", text)
+        if match:
+            num_str = match.group(0)
+            # Se tem ponto e vírgula, tratar conforme formato
+            # "1,234" ou "1.234" = 1234 (separador de milhar)
+            num_str = num_str.replace(",", "").replace(".", "")
+            return int(num_str) if num_str else 0
+        return 0
+
+    def _extract_count_from_element(self, page: Page, selector: str) -> int:
+        """Extrai contagem de um elemento, tentando title e text_content."""
+        el = page.locator(selector)
+        if el.count() == 0:
+            return -1
+        # O atributo title tem o número exato (ex: "12.345")
+        title = el.first.get_attribute("title")
+        if title:
+            return self._parse_count(title)
+        # Fallback: span dentro do link com o número
+        span = el.first.locator("span")
+        if span.count() > 0:
+            title2 = span.first.get_attribute("title")
+            if title2:
+                return self._parse_count(title2)
+            return self._parse_count(span.first.text_content() or "0")
+        return self._parse_count(el.first.text_content() or "0")
 
     def _check_profile_filter(self, username: str) -> bool:
         """Abre o perfil em nova aba e verifica se seguindo > seguidores."""
@@ -371,23 +399,58 @@ class InstagramBot:
             )
             self._delay(1, 2)
 
-            header = page2.locator("header section")
-            stats_items = header.locator("li")
-            if stats_items.count() < 3:
+            # Método 1: buscar pelos links de followers/following (mais confiável)
+            followers_count = self._extract_count_from_element(
+                page2, f'a[href="/{username}/followers/"]'
+            )
+            following_count = self._extract_count_from_element(
+                page2, f'a[href="/{username}/following/"]'
+            )
+
+            # Método 2: fallback via <li> (estrutura antiga)
+            if followers_count < 0 or following_count < 0:
+                header = page2.locator("header section, header")
+                stats_items = header.locator("li")
+                if stats_items.count() >= 3:
+                    followers_count = self._parse_count(
+                        stats_items.nth(1).text_content() or "0"
+                    )
+                    following_count = self._parse_count(
+                        stats_items.nth(2).text_content() or "0"
+                    )
+
+            # Método 3: fallback via JavaScript (busca todos os links)
+            if followers_count < 0 or following_count < 0:
+                counts = page2.evaluate("""() => {
+                    const result = {followers: -1, following: -1};
+                    const links = document.querySelectorAll('a');
+                    for (const a of links) {
+                        const href = a.getAttribute('href') || '';
+                        if (href.endsWith('/followers/')) {
+                            const span = a.querySelector('span');
+                            result.followers = (span && (span.title || span.textContent)) || a.title || a.textContent || '0';
+                        }
+                        if (href.endsWith('/following/')) {
+                            const span = a.querySelector('span');
+                            result.following = (span && (span.title || span.textContent)) || a.title || a.textContent || '0';
+                        }
+                    }
+                    return result;
+                }""")
+                if counts.get("followers") not in (None, -1):
+                    followers_count = self._parse_count(str(counts["followers"]))
+                if counts.get("following") not in (None, -1):
+                    following_count = self._parse_count(str(counts["following"]))
+
+            if followers_count < 0 or following_count < 0:
                 self._log(f"  @{username}: não consegui ler os dados. Pulando.")
                 return False
 
-            followers_text = stats_items.nth(1).text_content()
-            following_text = stats_items.nth(2).text_content()
-
-            followers_count = self._parse_count(followers_text)
-            following_count = self._parse_count(following_text)
-
             passes = following_count > followers_count
-            status = "Aprovado" if passes else "Reprovado"
+            status = "✓ Aprovado" if passes else "✗ Reprovado"
             self._log(
                 f"  @{username}: {followers_count} seguidores, "
-                f"{following_count} seguindo -> {status}"
+                f"{following_count} seguindo → {status}"
             )
             return passes
         except (PlaywrightTimeout, Exception) as exc:
