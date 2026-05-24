@@ -459,27 +459,25 @@ class InstagramBot:
                 timeout=20000,
             )
             # Esperar o SPA renderizar (React precisa de tempo)
-            self._delay(2, 4)
+            self._delay(3, 5)
 
-            # Aguardar links de seguidores aparecerem (até 8s)
-            try:
-                page2.wait_for_selector(
-                    'a[href*="followers"], a[href*="following"]',
-                    timeout=8000,
-                )
-            except PlaywrightTimeout:
-                self._log(f"  @{username}: página não carregou. Pulando.")
-                return False
+            # Tentar extrair dados, com retry se não encontrar de primeira
+            counts = None
+            for attempt in range(3):
+                counts = self._extract_profile_counts(page2, username)
+                if counts.get("followers") and counts.get("following"):
+                    break
+                # Esperar mais um pouco e tentar de novo
+                self._delay(2, 3)
 
-            counts = self._extract_profile_counts(page2, username)
-
-            followers_raw = counts.get("followers")
-            following_raw = counts.get("following")
+            followers_raw = counts.get("followers") if counts else None
+            following_raw = counts.get("following") if counts else None
 
             if not followers_raw or not following_raw:
                 self._log(
                     f"  @{username}: não consegui ler os dados "
-                    f"({counts.get('debug', '')}). Pulando."
+                    f"({counts.get('debug', '') if counts else 'sem dados'}). "
+                    f"Pulando."
                 )
                 return False
 
