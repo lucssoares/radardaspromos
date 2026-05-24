@@ -11,7 +11,7 @@ import threading
 
 import customtkinter as ctk
 
-from bot import InstagramBot, launch_chrome_with_debug
+from bot import InstagramBot, launch_chrome_for_login, launch_chrome_with_debug
 from instagram_api import InstagramAPI, load_token_data
 
 ctk.set_appearance_mode("dark")
@@ -151,38 +151,52 @@ class App(ctk.CTk):
             row=3, column=0, columnspan=2, padx=12, pady=(4, 12), sticky="w"
         )
 
-        # ── Botões ───────────────────────────────────────────────────────
-        btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        btn_frame.pack(padx=10, pady=(0, 6), fill="x")
+        # ── Botões (linha 1) ──────────────────────────────────────────────
+        btn_frame1 = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_frame1.pack(padx=10, pady=(0, 4), fill="x")
 
         self.login_btn = ctk.CTkButton(
-            btn_frame,
-            text="1. Abrir Chrome e Logar",
-            command=self._on_open_chrome,
-            width=200,
+            btn_frame1,
+            text="1. Fazer Login (1a vez)",
+            command=self._on_login,
+            width=190,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#2196F3",
+            hover_color="#1976D2",
         )
-        self.login_btn.pack(side="left", padx=(0, 10))
+        self.login_btn.pack(side="left", padx=(0, 8))
+
+        self.connect_btn = ctk.CTkButton(
+            btn_frame1,
+            text="2. Conectar Bot",
+            command=self._on_connect_bot,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#FF9800",
+            hover_color="#F57C00",
+        )
+        self.connect_btn.pack(side="left", padx=(0, 8))
 
         self.start_btn = ctk.CTkButton(
-            btn_frame,
-            text="2. Iniciar Follow",
+            btn_frame1,
+            text="3. Iniciar Follow",
             command=self._on_start,
-            width=180,
+            width=150,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
             fg_color="#4CAF50",
             hover_color="#388E3C",
         )
-        self.start_btn.pack(side="left", padx=(0, 10))
+        self.start_btn.pack(side="left", padx=(0, 8))
 
         self.stop_btn = ctk.CTkButton(
-            btn_frame,
+            btn_frame1,
             text="Parar",
             command=self._on_stop,
-            width=100,
+            width=80,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
@@ -190,6 +204,15 @@ class App(ctk.CTk):
             hover_color="#D32F2F",
         )
         self.stop_btn.pack(side="left")
+
+        # ── Instrução ────────────────────────────────────────────────────
+        hint_label = ctk.CTkLabel(
+            tab,
+            text="Passo 1 só na 1a vez. Depois, use direto o passo 2 (login já salvo).",
+            font=ctk.CTkFont(size=11),
+            text_color="#FF9800",
+        )
+        hint_label.pack(pady=(0, 2))
 
         # ── Barra de progresso ───────────────────────────────────────────
         self.progress = ctk.CTkProgressBar(tab, width=660)
@@ -465,16 +488,38 @@ class App(ctk.CTk):
 
     # ── Bot callbacks ────────────────────────────────────────────────────
 
-    def _on_open_chrome(self) -> None:
-        """Abre o Chrome com debug e conecta via CDP."""
+    def _on_login(self) -> None:
+        """Abre Chrome normal (sem debug) para o usuário fazer login."""
         self.login_btn.configure(state="disabled")
-        self._safe_log("Abrindo Chrome do bot (pode manter seu Chrome aberto)...")
+        self._safe_log("Abrindo Chrome normal para login...")
+        self._safe_log("(Sem automação — Instagram não detecta nada)")
 
         def _task():
-            # Abrir Chrome com porta de debug
-            self._chrome_process = launch_chrome_with_debug(on_log=self._safe_log)
+            self._chrome_process = launch_chrome_for_login(
+                on_log=self._safe_log,
+            )
+            self._safe_log("")
+            self._safe_log("=" * 50)
+            self._safe_log("INSTRUÇÕES:")
+            self._safe_log("1. Faça login no Instagram na janela que abriu")
+            self._safe_log("2. FECHE a janela do Chrome do bot")
+            self._safe_log("3. Clique em 'Conectar Bot' aqui no app")
+            self._safe_log("=" * 50)
+            self.after(0, lambda: self.login_btn.configure(state="normal"))
 
-            # Conectar via CDP (na mesma thread que vai executar as ações)
+        self._submit_task(_task)
+
+    def _on_connect_bot(self) -> None:
+        """Fecha Chrome do login, reabre com debug e conecta via CDP."""
+        self.connect_btn.configure(state="disabled")
+        self.login_btn.configure(state="disabled")
+        self._safe_log("Conectando bot ao Instagram...")
+
+        def _task():
+            self._chrome_process = launch_chrome_with_debug(
+                on_log=self._safe_log,
+            )
+
             try:
                 from playwright.sync_api import sync_playwright as start_pw
 
@@ -489,18 +534,21 @@ class App(ctk.CTk):
                 self._bot.connect_to_chrome(self._pw)
 
                 if self._bot.is_already_logged_in():
-                    self._safe_log("Sessão anterior detectada! Já está logado.")
+                    self._safe_log("Login detectado! Pronto para iniciar.")
                 else:
-                    self._safe_log("Faça login no Instagram e clique 'Iniciar Follow'.")
+                    self._safe_log(
+                        "Login não detectado. Use o botão 1 para logar primeiro."
+                    )
 
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
+                self.after(0, lambda: self.connect_btn.configure(state="normal"))
 
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
                 self._safe_log(
-                    "Tente novamente. Se o erro persistir, feche o Chrome "
-                    "manualmente e clique no botão de novo."
+                    "Feche o Chrome do bot e tente novamente."
                 )
+                self.after(0, lambda: self.connect_btn.configure(state="normal"))
                 self.after(0, lambda: self.login_btn.configure(state="normal"))
 
         self._submit_task(_task)
@@ -524,6 +572,7 @@ class App(ctk.CTk):
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.login_btn.configure(state="disabled")
+        self.connect_btn.configure(state="disabled")
         self._running = True
 
         def _task():
@@ -560,6 +609,7 @@ class App(ctk.CTk):
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
         self.login_btn.configure(state="normal")
+        self.connect_btn.configure(state="normal")
 
     # ── Dashboard callbacks ──────────────────────────────────────────────
 

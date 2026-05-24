@@ -73,20 +73,80 @@ def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:
     return False
 
 
-def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
-    """Abre o Chrome com perfil separado e porta de debug ativa.
+def launch_chrome_for_login(on_log=None) -> subprocess.Popen:
+    """Abre o Chrome SEM porta de debug para o usuário fazer login.
 
-    Usa um perfil dedicado para o bot (chrome_bot_profile/) em vez do
-    perfil real do Chrome. Isso evita conflito com o Chrome já aberto
-    e garante que a porta de debug funcione.
-    O login é salvo neste perfil — só precisa logar uma vez.
+    Abre um Chrome completamente normal (sem nenhuma flag de automação)
+    usando o perfil dedicado do bot. O Instagram não detecta nada.
+    O login fica salvo no perfil para uso futuro.
     """
     log = on_log or (lambda msg: None)
     chrome_path = _find_chrome()
     log(f"Chrome encontrado: {chrome_path}")
 
     os.makedirs(BOT_PROFILE_DIR, exist_ok=True)
-    log(f"Usando perfil do bot: {BOT_PROFILE_DIR}")
+    log(f"Perfil do bot: {BOT_PROFILE_DIR}")
+
+    cmd = [
+        chrome_path,
+        f"--user-data-dir={BOT_PROFILE_DIR}",
+        "--start-maximized",
+        "https://www.instagram.com/",
+    ]
+
+    log("Abrindo Chrome normal para login (sem automação)...")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    log("Chrome aberto! Faça login no Instagram normalmente.")
+    log("Depois de logado, FECHE o Chrome e clique 'Conectar e Iniciar'.")
+    return process
+
+
+def _kill_bot_chrome(on_log=None) -> None:
+    """Fecha processos Chrome que usam o perfil do bot."""
+    log = on_log or (lambda msg: None)
+    if platform.system() == "Windows":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "chrome.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            log("Chrome fechado.")
+            time.sleep(2)
+        except Exception:
+            log("Não foi possível fechar o Chrome automaticamente.")
+    else:
+        try:
+            subprocess.run(
+                ["pkill", "-f", BOT_PROFILE_DIR],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            time.sleep(2)
+        except Exception:
+            pass
+
+
+def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
+    """Abre o Chrome COM porta de debug para o bot conectar via CDP.
+
+    Deve ser chamado DEPOIS do login. O perfil já contém os cookies
+    de login, então o Instagram abre já logado.
+    """
+    log = on_log or (lambda msg: None)
+    chrome_path = _find_chrome()
+
+    os.makedirs(BOT_PROFILE_DIR, exist_ok=True)
+
+    # Fechar Chrome do bot se estiver aberto
+    _kill_bot_chrome(on_log=log)
 
     cmd = [
         chrome_path,
@@ -98,14 +158,13 @@ def launch_chrome_with_debug(on_log=None) -> subprocess.Popen:
         "https://www.instagram.com/",
     ]
 
-    log("Abrindo Chrome (janela separada para o bot)...")
+    log("Abrindo Chrome com porta de debug...")
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
-    # Aguardar porta CDP ficar disponível
     log("Aguardando porta de debug ficar pronta...")
     if _wait_for_cdp_port(CDP_PORT, timeout=30, on_log=log):
         log("Chrome pronto para conexão!")
