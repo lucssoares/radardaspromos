@@ -399,11 +399,35 @@ class InstagramBot:
     # ── Scroll na lista de seguidores ────────────────────────────────────
 
     def _scroll_followers(self) -> None:
+        """Rola a lista de seguidores para carregar mais perfis."""
         dialog = self._page.locator("div[role='dialog']")
-        if dialog.count() > 0:
-            scrollable = dialog.locator("div[style*='overflow']")
-            if scrollable.count() > 0:
-                scrollable.first.evaluate("el => el.scrollTop = el.scrollHeight")
+        if dialog.count() == 0:
+            return
+
+        # Tentar encontrar o contêiner rolável dentro do dialog
+        scrolled = dialog.first.evaluate("""(dlg) => {
+            // Procurar o elemento rolável dentro do dialog
+            const candidates = dlg.querySelectorAll('div');
+            for (const el of candidates) {
+                const style = window.getComputedStyle(el);
+                const overflowY = style.overflowY;
+                if ((overflowY === 'auto' || overflowY === 'scroll')
+                    && el.scrollHeight > el.clientHeight) {
+                    const before = el.scrollTop;
+                    el.scrollBy(0, 600);
+                    return el.scrollTop > before;
+                }
+            }
+            return false;
+        }""")
+
+        if not scrolled:
+            # Fallback: focar no dialog e usar keyboard
+            try:
+                dialog.first.click()
+                self._page.mouse.wheel(0, 600)
+            except Exception:
+                pass
 
     # ── Extrair usernames da lista ───────────────────────────────────────
 
@@ -438,12 +462,15 @@ class InstagramBot:
 
             if not new_usernames:
                 stale_rounds += 1
-                if stale_rounds >= 3:
+                if stale_rounds >= 5:
                     self._log("Não há mais perfis novos na lista.")
                     break
-                self._log("Rolando para carregar mais perfis...")
+                self._log(
+                    f"Rolando para carregar mais perfis "
+                    f"(tentativa {stale_rounds}/5)..."
+                )
                 self._scroll_followers()
-                self._delay(2, 3)
+                self._delay(2, 4)
                 continue
 
             stale_rounds = 0
