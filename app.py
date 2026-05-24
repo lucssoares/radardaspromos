@@ -11,7 +11,12 @@ import threading
 
 import customtkinter as ctk
 
-from bot import InstagramBot, launch_chrome_for_login, launch_chrome_with_debug
+from bot import (
+    InstagramBot,
+    launch_chrome_for_login,
+    launch_chrome_with_debug,
+    load_follow_log,
+)
 from instagram_api import InstagramAPI, load_token_data
 
 ctk.set_appearance_mode("dark")
@@ -86,9 +91,11 @@ class App(ctk.CTk):
         self.tabview.pack(padx=20, pady=(0, 10), fill="both", expand=True)
 
         self.tab_bot = self.tabview.add("Bot de Follow")
+        self.tab_unfollow = self.tabview.add("Limpar Desumildes")
         self.tab_dashboard = self.tabview.add("Dashboard de Métricas")
 
         self._build_bot_tab()
+        self._build_unfollow_tab()
         self._build_dashboard_tab()
 
     def _build_bot_tab(self) -> None:
@@ -227,6 +234,128 @@ class App(ctk.CTk):
         # ── Log ──────────────────────────────────────────────────────────
         self.log_box = ctk.CTkTextbox(tab, width=660, height=170, state="disabled")
         self.log_box.pack(padx=10, pady=(0, 10))
+
+    def _build_unfollow_tab(self) -> None:
+        """Constrói a aba de limpeza de desumildes (unfollow)."""
+        tab = self.tab_unfollow
+
+        # ── Título ────────────────────────────────────────────────────────
+        ctk.CTkLabel(
+            tab,
+            text="Limpeza de Desumildes",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(pady=(10, 2))
+
+        ctk.CTkLabel(
+            tab,
+            text="Deixa de seguir quem não te segue de volta após X dias",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        ).pack(pady=(0, 8))
+
+        # ── Configuração ──────────────────────────────────────────────────
+        config_frame = ctk.CTkFrame(tab)
+        config_frame.pack(padx=10, pady=(0, 8), fill="x")
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Seu @ (sem @):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
+
+        self.my_username_entry = ctk.CTkEntry(
+            config_frame, placeholder_text="ex: seu_usuario", width=250
+        )
+        self.my_username_entry.grid(
+            row=0, column=1, padx=12, pady=(12, 4), sticky="w"
+        )
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Dias mínimos:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=1, column=0, padx=12, pady=4, sticky="w")
+
+        self.days_entry = ctk.CTkEntry(
+            config_frame, placeholder_text="3", width=80
+        )
+        self.days_entry.insert(0, "3")
+        self.days_entry.grid(row=1, column=1, padx=12, pady=4, sticky="w")
+
+        ctk.CTkLabel(
+            config_frame,
+            text="(só faz unfollow se seguiu há mais de X dias)",
+            font=ctk.CTkFont(size=11),
+            text_color="#FF9800",
+        ).grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w")
+
+        # ── Info dos follows registrados ──────────────────────────────────
+        self.follow_count_label = ctk.CTkLabel(
+            tab,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#4CAF50",
+        )
+        self.follow_count_label.pack(pady=(0, 4))
+        self._update_follow_count()
+
+        # ── Botões ────────────────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_frame.pack(padx=10, pady=(0, 4), fill="x")
+
+        self.unfollow_connect_btn = ctk.CTkButton(
+            btn_frame,
+            text="1. Conectar Bot",
+            command=self._on_connect_bot,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#FF9800",
+            hover_color="#F57C00",
+        )
+        self.unfollow_connect_btn.pack(side="left", padx=(0, 8))
+
+        self.unfollow_btn = ctk.CTkButton(
+            btn_frame,
+            text="2. Limpar Desumildes",
+            command=self._on_unfollow,
+            width=200,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#E91E63",
+            hover_color="#C2185B",
+        )
+        self.unfollow_btn.pack(side="left", padx=(0, 8))
+
+        self.unfollow_stop_btn = ctk.CTkButton(
+            btn_frame,
+            text="Parar",
+            command=self._on_stop,
+            width=80,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#F44336",
+            hover_color="#D32F2F",
+        )
+        self.unfollow_stop_btn.pack(side="left")
+
+        # ── Log ──────────────────────────────────────────────────────────
+        self.unfollow_log_box = ctk.CTkTextbox(
+            tab, width=660, height=200, state="disabled"
+        )
+        self.unfollow_log_box.pack(padx=10, pady=(8, 10))
+
+    def _update_follow_count(self) -> None:
+        """Atualiza o contador de follows registrados."""
+        log = load_follow_log()
+        count = len(log)
+        if count == 0:
+            text = "Nenhum follow registrado ainda. Use o Bot de Follow primeiro."
+        else:
+            text = f"{count} follows registrados no histórico."
+        self.follow_count_label.configure(text=text)
 
     def _build_dashboard_tab(self) -> None:
         """Constrói a aba do dashboard de métricas."""
@@ -478,6 +607,15 @@ class App(ctk.CTk):
     def _safe_dash_log(self, msg: str) -> None:
         self.after(0, self._append_dash_log, msg)
 
+    def _append_unfollow_log(self, msg: str) -> None:
+        self.unfollow_log_box.configure(state="normal")
+        self.unfollow_log_box.insert("end", msg + "\n")
+        self.unfollow_log_box.see("end")
+        self.unfollow_log_box.configure(state="disabled")
+
+    def _safe_unfollow_log(self, msg: str) -> None:
+        self.after(0, self._append_unfollow_log, msg)
+
     def _safe_progress(self, current: int, total: int) -> None:
         def _update():
             if total > 0:
@@ -542,6 +680,7 @@ class App(ctk.CTk):
 
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
                 self.after(0, lambda: self.connect_btn.configure(state="normal"))
+                self.after(0, lambda: self.unfollow_btn.configure(state="normal"))
 
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
@@ -599,17 +738,60 @@ class App(ctk.CTk):
 
         self._submit_task(_task)
 
+    def _on_unfollow(self) -> None:
+        """Inicia o processo de limpeza de desumildes."""
+        my_user = self.my_username_entry.get().strip().lstrip("@").strip("/")
+        if not my_user:
+            self._append_unfollow_log("Preencha seu @ (nome de usuário)!")
+            return
+
+        if not self._bot:
+            self._append_unfollow_log(
+                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
+            )
+            return
+
+        try:
+            days = int(self.days_entry.get().strip())
+        except (ValueError, AttributeError):
+            days = 3
+
+        self._bot._stop_requested = False
+        self._bot.on_log = self._safe_unfollow_log
+        self.unfollow_btn.configure(state="disabled")
+        self.unfollow_stop_btn.configure(state="normal")
+        self.unfollow_connect_btn.configure(state="disabled")
+        self._running = True
+
+        def _task():
+            try:
+                self._bot.unfollow_non_followers(my_user, days)
+            except Exception as exc:
+                self._safe_unfollow_log(f"Erro: {exc}")
+            finally:
+                self._running = False
+                self._bot.on_log = self._safe_log
+                self.after(0, self._reset_buttons)
+                self.after(0, self._update_follow_count)
+
+        self._submit_task(_task)
+
     def _on_stop(self) -> None:
         if self._bot:
             self._bot.request_stop()
             self._safe_log("Parando... aguarde a ação atual finalizar.")
+            self._safe_unfollow_log("Parando... aguarde a ação atual finalizar.")
         self.stop_btn.configure(state="disabled")
+        self.unfollow_stop_btn.configure(state="disabled")
 
     def _reset_buttons(self) -> None:
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
         self.login_btn.configure(state="normal")
         self.connect_btn.configure(state="normal")
+        self.unfollow_btn.configure(state="normal")
+        self.unfollow_stop_btn.configure(state="disabled")
+        self.unfollow_connect_btn.configure(state="normal")
 
     # ── Dashboard callbacks ──────────────────────────────────────────────
 

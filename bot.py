@@ -4,6 +4,7 @@ Conecta ao Chrome real do usuário aberto com --remote-debugging-port.
 O Instagram não detecta automação porque é literalmente o Chrome normal.
 """
 
+import json
 import logging
 import os
 import platform
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
+from datetime import datetime, timezone
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -54,6 +56,37 @@ os.makedirs(_APP_DATA_DIR, exist_ok=True)
 
 # Perfil separado para o bot (evita conflito com Chrome já aberto)
 BOT_PROFILE_DIR = os.path.join(_APP_DATA_DIR, "chrome_bot_profile")
+
+# Registro de follows com data (para regra de unfollow após 3 dias)
+FOLLOW_LOG_FILE = os.path.join(_APP_DATA_DIR, "follow_log.json")
+
+
+def load_follow_log() -> dict:
+    """Carrega o registro de follows. Retorna {username: iso_date_str}."""
+    if os.path.isfile(FOLLOW_LOG_FILE):
+        with open(FOLLOW_LOG_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_follow_log(log: dict) -> None:
+    """Salva o registro de follows."""
+    with open(FOLLOW_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(log, f, ensure_ascii=False, indent=2)
+
+
+def record_follow(username: str) -> None:
+    """Registra que um usuário foi seguido agora."""
+    log = load_follow_log()
+    log[username] = datetime.now(timezone.utc).isoformat()
+    save_follow_log(log)
+
+
+def remove_from_follow_log(username: str) -> None:
+    """Remove um usuário do registro de follows."""
+    log = load_follow_log()
+    log.pop(username, None)
+    save_follow_log(log)
 
 
 def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:
@@ -605,6 +638,7 @@ class InstagramBot:
                 btn_text = follow_btn.first.text_content().strip().lower()
                 if btn_text in ("seguir", "follow"):
                     follow_btn.first.click()
+                    record_follow(username)
                     stats["followed"] += 1
                     self._log(
                         f"[{stats['followed']}/{self.max_follows}] "
@@ -623,3 +657,168 @@ class InstagramBot:
             return False
         finally:
             page2.close()
+
+    # ── Unfollow (limpeza de desumildes) ──────────────────────────────────
+
+    def _check_follows_back(self, username: str) -> bool:
+        """Verifica se @username te segue de volta."""
+        page2 = self._context.new_page()
+        try:
+            page2.goto(
+                f"https://www.instagram.com/{username}/",
+                wait_until="load",
+                timeout=20000,
+            )
+            self._delay(3, 5)
+
+            # Verificar se o botão mostra "Seguindo" (= você segue essa pessoa)
+            # e se há indicação de "Segue você" / "Follows you"
+            text = page2.evaluate("""() => {
+                const header = document.querySelector('header');
+                return header ? header.innerText : '';
+            }""")
+
+            follows_back = (
+                "segue você" in text.lower()
+                or "follows you" in text.lower()
+            )
+            return follows_back
+        except Exception:
+            return True  # Em caso de erro, não faz unfollow (segurança)
+        finally:
+            page2.close()
+
+    def _unfollow_user(self, username: str) -> bool:
+        """Deixa de seguir um usuário."""
+        page2 = self._context.new_page()
+        try:
+            page2.goto(
+                f"https://www.instagram.com/{username}/",
+                wait_until="load",
+                timeout=20000,
+            )
+            self._delay(2, 4)
+
+            # Clicar em "Seguindo" / "Following"
+            following_btn = page2.locator(
+                "header button:has-text('Seguindo'), "
+                "header button:has-text('Following')"
+            )
+            if following_btn.count() == 0:
+                self._log(f"  @{username}: botão 'Seguindo' não encontrado.")
+                return False
+
+            following_btn.first.click()
+            self._delay(1, 2)
+
+            # Confirmar unfollow no popup
+            unfollow_btn = page2.locator(
+                "button:has-text('Deixar de seguir'), "
+                "button:has-text('Unfollow')"
+            )
+            if unfollow_btn.count() > 0:
+                unfollow_btn.first.click()
+                remove_from_follow_log(username)
+                self._delay(1, 2)
+                return True
+
+            self._log(f"  @{username}: popup de unfollow não apareceu.")
+            return False
+        except Exception as exc:
+            self._log(f"  Erro ao deixar de seguir @{username}: {exc}")
+            return False
+        finally:
+            page2.close()
+
+    def open_following_list(self, my_username: str) -> bool:
+        """Abre a lista de 'Seguindo' do próprio perfil."""
+        self._log(f"Navegando para @{my_username}...")
+        self._page.goto(
+            f"https://www.instagram.com/{my_username}/",
+            wait_until="load",
+            timeout=30000,
+        )
+        self._delay(2, 3)
+
+        following_link = self._page.locator(
+            f'a[href="/{my_username}/following/"]'
+        )
+        if following_link.count() == 0:
+            following_link = self._page.locator(
+                "a:has-text('seguindo'), a:has-text('following')"
+            )
+        if following_link.count() == 0:
+            self._log("Não encontrei o link de 'seguindo'.")
+            return False
+
+        following_link.first.click()
+        self._delay(2, 3)
+        self._log("Lista de 'seguindo' aberta!")
+        return True
+
+    def unfollow_non_followers(
+        self, my_username: str, days_threshold: int = 3
+    ) -> dict:
+        """Deixa de seguir quem não segue de volta após X dias."""
+        stats = {"unfollowed": 0, "follows_back": 0, "too_recent": 0,
+                 "errors": 0, "checked": 0}
+        follow_log = load_follow_log()
+
+        self._log(f"Iniciando limpeza (regra: {days_threshold} dias)...")
+        self._log(f"  {len(follow_log)} follows registrados no histórico.")
+        self._delay(1, 2)
+
+        if not follow_log:
+            self._log("Nenhum follow registrado. Use o bot primeiro!")
+            return stats
+
+        now = datetime.now(timezone.utc)
+        candidates = []
+        for username, date_str in follow_log.items():
+            try:
+                followed_at = datetime.fromisoformat(date_str)
+                days_ago = (now - followed_at).days
+                if days_ago >= days_threshold:
+                    candidates.append((username, days_ago))
+                else:
+                    stats["too_recent"] += 1
+            except (ValueError, TypeError):
+                candidates.append((username, 999))
+
+        self._log(
+            f"  {len(candidates)} candidatos para unfollow "
+            f"({stats['too_recent']} seguidos há menos de {days_threshold} dias)."
+        )
+
+        for username, days_ago in candidates:
+            if self._stop_requested:
+                break
+
+            stats["checked"] += 1
+            self.on_progress(stats["unfollowed"], len(candidates))
+            self._log(f"Verificando @{username} (seguido há {days_ago} dias)...")
+
+            if self._check_follows_back(username):
+                self._log(f"  @{username}: segue de volta! Mantendo.")
+                stats["follows_back"] += 1
+                continue
+
+            self._log(f"  @{username}: NÃO segue de volta. Deixando de seguir...")
+            if self._unfollow_user(username):
+                stats["unfollowed"] += 1
+                self._log(
+                    f"  [{stats['unfollowed']}] Unfollow @{username}!"
+                )
+            else:
+                stats["errors"] += 1
+
+            self._delay()
+
+        self._log("=" * 50)
+        self._log("Limpeza finalizada!")
+        self._log(f"  Unfollowed: {stats['unfollowed']}")
+        self._log(f"  Seguem de volta: {stats['follows_back']}")
+        self._log(f"  Muito recentes: {stats['too_recent']}")
+        self._log(f"  Erros: {stats['errors']}")
+        self._log("=" * 50)
+        return stats
