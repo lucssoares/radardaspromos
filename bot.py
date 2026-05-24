@@ -730,8 +730,8 @@ class InstagramBot:
         finally:
             page2.close()
 
-    def open_following_list(self, my_username: str) -> bool:
-        """Abre a lista de 'Seguindo' do próprio perfil."""
+    def _collect_following_list(self, my_username: str) -> list[str]:
+        """Abre o perfil, clica em 'Seguindo' e coleta todos os usernames."""
         self._log(f"Navegando para @{my_username}...")
         self._page.goto(
             f"https://www.instagram.com/{my_username}/",
@@ -740,6 +740,7 @@ class InstagramBot:
         )
         self._delay(2, 3)
 
+        # Clicar no link "seguindo"
         following_link = self._page.locator(
             f'a[href="/{my_username}/following/"]'
         )
@@ -749,28 +750,85 @@ class InstagramBot:
             )
         if following_link.count() == 0:
             self._log("Não encontrei o link de 'seguindo'.")
-            return False
+            return []
 
         following_link.first.click()
         self._delay(2, 3)
-        self._log("Lista de 'seguindo' aberta!")
-        return True
+        self._log("Lista de 'seguindo' aberta! Coletando usernames...")
+
+        # Coletar usernames com scroll
+        all_usernames: set[str] = set()
+        stale_rounds = 0
+
+        while stale_rounds < 5 and not self._stop_requested:
+            before_count = len(all_usernames)
+            new = self._get_visible_usernames()
+            all_usernames.update(new)
+
+            if len(all_usernames) == before_count:
+                stale_rounds += 1
+            else:
+                stale_rounds = 0
+                self._log(f"  {len(all_usernames)} perfis coletados...")
+
+            self._scroll_followers()
+            self._delay(1, 2)
+
+        # Remover o próprio username
+        all_usernames.discard(my_username)
+
+        self._log(f"Total: {len(all_usernames)} perfis coletados.")
+
+        # Fechar dialog
+        self._page.keyboard.press("Escape")
+        self._delay(1, 2)
+
+        return list(all_usernames)
 
     def unfollow_non_followers(
         self, my_username: str, days_threshold: int = 3
     ) -> dict:
-        """Deixa de seguir quem não segue de volta após X dias."""
+        """Deixa de seguir quem não segue de volta após X dias.
+
+        Na primeira execução, coleta todos os 'seguindo' do Instagram
+        e registra no follow_log.json com a data de hoje.
+        Nas próximas, usa o registro para aplicar a regra de dias.
+        """
         stats = {"unfollowed": 0, "follows_back": 0, "too_recent": 0,
-                 "errors": 0, "checked": 0}
+                 "errors": 0, "checked": 0, "mapped": 0}
         follow_log = load_follow_log()
 
         self._log(f"Iniciando limpeza (regra: {days_threshold} dias)...")
+
+        # Se o log está vazio ou tem poucos registros, mapear do Instagram
+        if len(follow_log) < 5:
+            self._log("Mapeando quem você segue no Instagram...")
+            following_list = self._collect_following_list(my_username)
+
+            if not following_list:
+                self._log("Não consegui coletar a lista de seguindo.")
+                return stats
+
+            # Registrar todos com data de hoje
+            now_str = datetime.now(timezone.utc).isoformat()
+            for u in following_list:
+                if u not in follow_log:
+                    follow_log[u] = now_str
+                    stats["mapped"] += 1
+
+            save_follow_log(follow_log)
+            self._log(
+                f"Mapeamento concluído! {stats['mapped']} perfis registrados."
+            )
+            self._log(
+                f"Execute novamente após {days_threshold} dias para "
+                f"fazer a limpeza."
+            )
+            self._log("=" * 50)
+            return stats
+
         self._log(f"  {len(follow_log)} follows registrados no histórico.")
         self._delay(1, 2)
-
-        if not follow_log:
-            self._log("Nenhum follow registrado. Use o bot primeiro!")
-            return stats
 
         now = datetime.now(timezone.utc)
         candidates = []
@@ -787,7 +845,8 @@ class InstagramBot:
 
         self._log(
             f"  {len(candidates)} candidatos para unfollow "
-            f"({stats['too_recent']} seguidos há menos de {days_threshold} dias)."
+            f"({stats['too_recent']} seguidos há menos de "
+            f"{days_threshold} dias)."
         )
 
         for username, days_ago in candidates:
@@ -796,14 +855,19 @@ class InstagramBot:
 
             stats["checked"] += 1
             self.on_progress(stats["unfollowed"], len(candidates))
-            self._log(f"Verificando @{username} (seguido há {days_ago} dias)...")
+            self._log(
+                f"Verificando @{username} (seguido há {days_ago} dias)..."
+            )
 
             if self._check_follows_back(username):
                 self._log(f"  @{username}: segue de volta! Mantendo.")
                 stats["follows_back"] += 1
                 continue
 
-            self._log(f"  @{username}: NÃO segue de volta. Deixando de seguir...")
+            self._log(
+                f"  @{username}: NÃO segue de volta. "
+                f"Deixando de seguir..."
+            )
             if self._unfollow_user(username):
                 stats["unfollowed"] += 1
                 self._log(
