@@ -47,10 +47,13 @@ def _find_chrome() -> str:
     return "chrome"
 
 
+# Diretório persistente para dados do bot (home do usuário)
+# Usa a pasta do usuário para que os dados persistam mesmo ao rodar como .exe
+_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".instafollow_bot")
+os.makedirs(_APP_DATA_DIR, exist_ok=True)
+
 # Perfil separado para o bot (evita conflito com Chrome já aberto)
-BOT_PROFILE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "chrome_bot_profile"
-)
+BOT_PROFILE_DIR = os.path.join(_APP_DATA_DIR, "chrome_bot_profile")
 
 
 def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:

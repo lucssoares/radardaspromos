@@ -15,10 +15,13 @@ from urllib.request import Request, urlopen
 API_VERSION = "v25.0"
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Diretório persistente para dados do bot (home do usuário)
+# Usa a pasta do usuário para que os dados persistam mesmo ao rodar como .exe
+_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".instafollow_bot")
+os.makedirs(_APP_DATA_DIR, exist_ok=True)
 
-HISTORY_FILE = os.path.join(_BASE_DIR, "metrics_history.json")
-TOKEN_FILE = os.path.join(_BASE_DIR, "token_data.json")
+HISTORY_FILE = os.path.join(_APP_DATA_DIR, "metrics_history.json")
+TOKEN_FILE = os.path.join(_APP_DATA_DIR, "token_data.json")
 
 
 # ── Gerenciamento de token ───────────────────────────────────────────────
