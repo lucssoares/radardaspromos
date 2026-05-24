@@ -370,23 +370,84 @@ class InstagramBot:
             return int(num_str) if num_str else 0
         return 0
 
-    def _extract_count_from_element(self, page: Page, selector: str) -> int:
-        """Extrai contagem de um elemento, tentando title e text_content."""
-        el = page.locator(selector)
-        if el.count() == 0:
-            return -1
-        # O atributo title tem o número exato (ex: "12.345")
-        title = el.first.get_attribute("title")
-        if title:
-            return self._parse_count(title)
-        # Fallback: span dentro do link com o número
-        span = el.first.locator("span")
-        if span.count() > 0:
-            title2 = span.first.get_attribute("title")
-            if title2:
-                return self._parse_count(title2)
-            return self._parse_count(span.first.text_content() or "0")
-        return self._parse_count(el.first.text_content() or "0")
+    def _extract_profile_counts(self, page: Page, username: str) -> dict:
+        """Extrai seguidores e seguindo de uma página de perfil via JS.
+
+        Espera o React renderizar e tenta múltiplas estratégias para
+        encontrar os contadores.
+        """
+        return page.evaluate("""(username) => {
+            const result = {followers: null, following: null, debug: ''};
+
+            // Estratégia 1: links com href /username/followers/ e /following/
+            const allLinks = document.querySelectorAll('a');
+            for (const a of allLinks) {
+                const href = a.getAttribute('href') || '';
+                const isFollowers = href.includes('/followers');
+                const isFollowing = href.includes('/following');
+                if (!isFollowers && !isFollowing) continue;
+
+                // Tentar title do link
+                let val = a.getAttribute('title');
+                // Tentar span com title
+                if (!val) {
+                    const spans = a.querySelectorAll('span');
+                    for (const s of spans) {
+                        if (s.getAttribute('title')) { val = s.getAttribute('title'); break; }
+                    }
+                }
+                // Tentar span com texto numérico
+                if (!val) {
+                    const spans = a.querySelectorAll('span');
+                    for (const s of spans) {
+                        const t = s.textContent.trim();
+                        if (t && /[\\d]/.test(t)) { val = t; break; }
+                    }
+                }
+                // Tentar texto do link inteiro
+                if (!val) {
+                    const t = a.textContent.trim();
+                    if (t && /[\\d]/.test(t)) { val = t; }
+                }
+
+                if (val && isFollowers && !result.followers) result.followers = val;
+                if (val && isFollowing && !result.following) result.following = val;
+            }
+
+            // Estratégia 2: procurar por <li> ou <div> contendo textos
+            // como "seguidores"/"followers" e "seguindo"/"following"
+            if (!result.followers || !result.following) {
+                const allEls = document.querySelectorAll('li, section > div > div');
+                for (const el of allEls) {
+                    const text = el.textContent || '';
+                    const lc = text.toLowerCase();
+                    const numMatch = text.match(/([\\d.,]+[KkMm]?)/);
+                    if (!numMatch) continue;
+                    if (!result.followers && (lc.includes('seguidores') || lc.includes('followers'))) {
+                        result.followers = numMatch[1];
+                    }
+                    if (!result.following && (lc.includes('seguindo') || lc.includes('following'))) {
+                        result.following = numMatch[1];
+                    }
+                }
+            }
+
+            // Estratégia 3: meta tags (og:description costuma ter os números)
+            if (!result.followers || !result.following) {
+                const meta = document.querySelector('meta[name="description"], meta[property="og:description"]');
+                if (meta) {
+                    const content = meta.getAttribute('content') || '';
+                    // ex: "1,234 Followers, 567 Following, 89 Posts"
+                    const fwers = content.match(/([\\d.,]+[KkMm]?)\\s*(?:Followers|seguidores)/i);
+                    const fwing = content.match(/([\\d.,]+[KkMm]?)\\s*(?:Following|seguindo)/i);
+                    if (fwers && !result.followers) result.followers = fwers[1];
+                    if (fwing && !result.following) result.following = fwing[1];
+                }
+            }
+
+            result.debug = `found: followers=${result.followers}, following=${result.following}`;
+            return result;
+        }""", username)
 
     def _check_profile_filter(self, username: str) -> bool:
         """Abre o perfil em nova aba e verifica se seguindo > seguidores."""
@@ -394,63 +455,42 @@ class InstagramBot:
         try:
             page2.goto(
                 f"https://www.instagram.com/{username}/",
-                wait_until="domcontentloaded",
-                timeout=15000,
+                wait_until="load",
+                timeout=20000,
             )
-            self._delay(1, 2)
+            # Esperar o SPA renderizar (React precisa de tempo)
+            self._delay(2, 4)
 
-            # Método 1: buscar pelos links de followers/following (mais confiável)
-            followers_count = self._extract_count_from_element(
-                page2, f'a[href="/{username}/followers/"]'
-            )
-            following_count = self._extract_count_from_element(
-                page2, f'a[href="/{username}/following/"]'
-            )
-
-            # Método 2: fallback via <li> (estrutura antiga)
-            if followers_count < 0 or following_count < 0:
-                header = page2.locator("header section, header")
-                stats_items = header.locator("li")
-                if stats_items.count() >= 3:
-                    followers_count = self._parse_count(
-                        stats_items.nth(1).text_content() or "0"
-                    )
-                    following_count = self._parse_count(
-                        stats_items.nth(2).text_content() or "0"
-                    )
-
-            # Método 3: fallback via JavaScript (busca todos os links)
-            if followers_count < 0 or following_count < 0:
-                counts = page2.evaluate("""() => {
-                    const result = {followers: -1, following: -1};
-                    const links = document.querySelectorAll('a');
-                    for (const a of links) {
-                        const href = a.getAttribute('href') || '';
-                        if (href.endsWith('/followers/')) {
-                            const span = a.querySelector('span');
-                            result.followers = (span && (span.title || span.textContent)) || a.title || a.textContent || '0';
-                        }
-                        if (href.endsWith('/following/')) {
-                            const span = a.querySelector('span');
-                            result.following = (span && (span.title || span.textContent)) || a.title || a.textContent || '0';
-                        }
-                    }
-                    return result;
-                }""")
-                if counts.get("followers") not in (None, -1):
-                    followers_count = self._parse_count(str(counts["followers"]))
-                if counts.get("following") not in (None, -1):
-                    following_count = self._parse_count(str(counts["following"]))
-
-            if followers_count < 0 or following_count < 0:
-                self._log(f"  @{username}: não consegui ler os dados. Pulando.")
+            # Aguardar links de seguidores aparecerem (até 8s)
+            try:
+                page2.wait_for_selector(
+                    'a[href*="followers"], a[href*="following"]',
+                    timeout=8000,
+                )
+            except PlaywrightTimeout:
+                self._log(f"  @{username}: página não carregou. Pulando.")
                 return False
 
+            counts = self._extract_profile_counts(page2, username)
+
+            followers_raw = counts.get("followers")
+            following_raw = counts.get("following")
+
+            if not followers_raw or not following_raw:
+                self._log(
+                    f"  @{username}: não consegui ler os dados "
+                    f"({counts.get('debug', '')}). Pulando."
+                )
+                return False
+
+            followers_count = self._parse_count(str(followers_raw))
+            following_count = self._parse_count(str(following_raw))
+
             passes = following_count > followers_count
-            status = "✓ Aprovado" if passes else "✗ Reprovado"
+            status = "Aprovado" if passes else "Reprovado"
             self._log(
                 f"  @{username}: {followers_count} seguidores, "
-                f"{following_count} seguindo → {status}"
+                f"{following_count} seguindo -> {status}"
             )
             return passes
         except (PlaywrightTimeout, Exception) as exc:
