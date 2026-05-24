@@ -379,96 +379,59 @@ class InstagramBot:
             return int(num_str) if num_str else 0
         return 0
 
-    def _extract_profile_counts(self, page: Page, username: str) -> dict:
-        """Extrai seguidores e seguindo de uma página de perfil via JS.
+    def _extract_profile_counts(self, page: Page) -> dict:
+        """Extrai seguidores e seguindo lendo o texto visível da página.
 
-        Espera o React renderizar e tenta múltiplas estratégias para
-        encontrar os contadores.
+        Abordagem simples: lê o innerText do header/main e usa regex
+        para encontrar os padrões "X seguidores" e "X seguindo".
+        Não depende da estrutura DOM (que muda frequentemente).
         """
-        return page.evaluate("""(username) => {
-            const result = {followers: null, following: null, debug: '', raw: {}};
+        return page.evaluate("""() => {
+            const result = {followers: null, following: null, debug: ''};
 
-            // Função auxiliar: extrai o número de um elemento <a>
-            function extractNumber(a) {
-                // 1. Atributo title do link (número exato)
-                let val = a.getAttribute('title');
-                if (val && /\\d/.test(val)) return val;
+            // Pegar o texto visível da área do perfil
+            const header = document.querySelector('header');
+            const main = document.querySelector('main');
+            const headerText = header ? header.innerText : '';
+            const mainText = main ? main.innerText : '';
+            const fullText = headerText + '\\n' + mainText;
+            result.debug = 'header: ' + headerText.substring(0, 200).replace(/\\n/g, ' | ');
 
-                // 2. Atributo title de qualquer span filho
-                const spans = a.querySelectorAll('span');
-                for (const s of spans) {
-                    val = s.getAttribute('title');
-                    if (val && /\\d/.test(val)) return val;
-                }
+            // Regex para capturar "NÚMERO seguidores" e "NÚMERO seguindo"
+            // Suporta: 1.234, 1,234, 12K, 12.3K, 12,3 mil, 1.2M, 1,2 mi
+            const numPattern = '([\\\\d.,]+\\\\s*(?:mil|mi|[KkMm])?)';
 
-                // 3. Span-folha (sem filhos span) com texto numérico
-                for (const s of spans) {
-                    if (s.querySelector('span')) continue;
-                    const t = s.textContent.trim();
-                    if (t && /\\d/.test(t) && t.length < 30) return t;
-                }
+            // Português e Inglês
+            const fwersMatch = fullText.match(
+                new RegExp(numPattern + '\\\\s*(?:seguidores|followers)', 'i')
+            );
+            const fwingMatch = fullText.match(
+                new RegExp(numPattern + '\\\\s*(?:seguindo|following)', 'i')
+            );
 
-                // 4. innerText do link (mais limpo que textContent)
-                val = a.innerText.trim();
-                if (val && /\\d/.test(val)) {
-                    // Extrair só a parte numérica (ex: "1.234 seguidores" -> "1.234")
-                    const m = val.match(/([\\d.,]+\\s*(?:mil|mi|[KkMm])?)/);
-                    if (m) return m[1].trim();
-                }
-                return null;
-            }
+            if (fwersMatch) result.followers = fwersMatch[1].trim();
+            if (fwingMatch) result.following = fwingMatch[1].trim();
 
-            // Estratégia 1: links com href contendo /followers/ ou /following/
-            const allLinks = document.querySelectorAll('a');
-            for (const a of allLinks) {
-                const href = a.getAttribute('href') || '';
-                if (href.includes('/followers') && !href.includes('/following')) {
-                    if (!result.followers) {
-                        const v = extractNumber(a);
-                        if (v) { result.followers = v; result.raw.followers_href = href; }
-                    }
-                }
-                if (href.includes('/following')) {
-                    if (!result.following) {
-                        const v = extractNumber(a);
-                        if (v) { result.following = v; result.raw.following_href = href; }
-                    }
-                }
-            }
-
-            // Estratégia 2: meta tag og:description
+            // Fallback: meta tag og:description
             if (!result.followers || !result.following) {
-                const meta = document.querySelector('meta[property="og:description"], meta[name="description"]');
+                const meta = document.querySelector(
+                    'meta[property="og:description"], meta[name="description"]'
+                );
                 if (meta) {
                     const content = meta.getAttribute('content') || '';
-                    result.raw.meta = content;
-                    const fwers = content.match(/([\\d.,]+[KkMm]?)\\s*(?:Followers|seguidores)/i);
-                    const fwing = content.match(/([\\d.,]+[KkMm]?)\\s*(?:Following|seguindo)/i);
-                    if (fwers && !result.followers) result.followers = fwers[1];
-                    if (fwing && !result.following) result.following = fwing[1];
+                    const mf = content.match(
+                        new RegExp(numPattern + '\\\\s*(?:Followers|seguidores)', 'i')
+                    );
+                    const mg = content.match(
+                        new RegExp(numPattern + '\\\\s*(?:Following|seguindo)', 'i')
+                    );
+                    if (mf && !result.followers) result.followers = mf[1].trim();
+                    if (mg && !result.following) result.following = mg[1].trim();
                 }
             }
 
-            // Estratégia 3: texto visível contendo "seguidores"/"seguindo"
-            if (!result.followers || !result.following) {
-                const allEls = document.querySelectorAll('header li, header ul > div, section li');
-                for (const el of allEls) {
-                    const text = (el.innerText || el.textContent || '').trim();
-                    const lc = text.toLowerCase();
-                    const numMatch = text.match(/([\\d.,]+\\s*(?:mil|mi|[KkMm])?)/i);
-                    if (!numMatch) continue;
-                    if (!result.followers && (lc.includes('seguidores') || lc.includes('followers'))) {
-                        result.followers = numMatch[1].trim();
-                    }
-                    if (!result.following && (lc.includes('seguindo') || lc.includes('following'))) {
-                        result.following = numMatch[1].trim();
-                    }
-                }
-            }
-
-            result.debug = `followers='${result.followers}', following='${result.following}'`;
             return result;
-        }""", username)
+        }""")
 
     def _check_profile_filter(self, username: str) -> bool:
         """Abre o perfil em nova aba e verifica se seguindo > seguidores."""
@@ -485,7 +448,7 @@ class InstagramBot:
             # Tentar extrair dados, com retry se não encontrar de primeira
             counts = None
             for attempt in range(3):
-                counts = self._extract_profile_counts(page2, username)
+                counts = self._extract_profile_counts(page2)
                 if counts.get("followers") and counts.get("following"):
                     break
                 # Esperar mais um pouco e tentar de novo
