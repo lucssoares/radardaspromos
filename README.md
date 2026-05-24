@@ -17,8 +17,11 @@ Este projeto é **apenas para fins educacionais**. O uso de automação viola os
 - **Limite de follows** por sessão
 - **Barra de progresso** e log em tempo real
 - **Botão de parar** para interromper a qualquer momento
+- **Dashboard de métricas**: acompanhe seguidores ganhos/perdidos via Instagram Graph API (requer conta profissional)
 
 ## Como funciona
+
+### Bot de Follow
 
 1. Clique em **"Abrir Chrome e Logar"** — abre o Chrome com perfil dedicado do bot
 2. Faça login no Instagram (pode usar 2FA normalmente)
@@ -28,11 +31,23 @@ Este projeto é **apenas para fins educacionais**. O uso de automação viola os
    - Se sim, segue o perfil (maior chance de follow-back)
    - Se não, pula para o próximo
 
+### Dashboard de Métricas
+
+Para usar o dashboard, você precisa de uma **conta profissional** (Business/Creator) no Instagram:
+
+1. Na aba **"Dashboard de Métricas"**, cole seu **Access Token** do Meta
+2. Clique **"Conectar à API"** — seus dados são carregados automaticamente
+3. Use **"Atualizar Métricas"** para registrar novos dados
+4. Use **"Ver Histórico"** para acompanhar a evolução dos seguidores
+
+Para obter o Access Token: acesse [Graph API Explorer](https://developers.facebook.com/tools/explorer/), selecione seu app e as permissões `instagram_business_basic` e `instagram_business_manage_insights`.
+
 ## Pré-requisitos
 
 - Python 3.12 ou 3.13 (**NÃO** usar 3.14 beta)
 - Google Chrome instalado
 - pip
+- Conta profissional no Instagram (para o dashboard de métricas)
 
 ## Instalação
 
@@ -84,6 +99,7 @@ O executável será gerado na pasta `dist/`.
 radardaspromos/
 ├── app.py                # Aplicativo GUI (CustomTkinter)
 ├── bot.py                # Lógica do bot (Playwright + CDP)
+├── instagram_api.py      # Módulo de métricas (Instagram Graph API)
 ├── instagram_follow.py   # Versão CLI (linha de comando)
 ├── requirements.txt      # Dependências Python
 ├── .env.example          # Template de configuração (para CLI)

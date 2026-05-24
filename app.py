@@ -3,6 +3,7 @@ Instagram Auto-Follow — Aplicativo Desktop.
 
 Interface gráfica para o bot de automação de follow no Instagram.
 Usa CDP para conectar ao Chrome real do usuário.
+Inclui dashboard de métricas via Instagram Graph API.
 """
 
 import queue
@@ -11,6 +12,7 @@ import threading
 import customtkinter as ctk
 
 from bot import InstagramBot, launch_chrome_with_debug
+from instagram_api import InstagramAPI
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -19,8 +21,8 @@ ctk.set_default_color_theme("blue")
 class App(ctk.CTk):
     """Janela principal do aplicativo."""
 
-    WIDTH = 700
-    HEIGHT = 620
+    WIDTH = 750
+    HEIGHT = 680
 
     def __init__(self):
         super().__init__()
@@ -31,6 +33,7 @@ class App(ctk.CTk):
         self._bot: InstagramBot | None = None
         self._chrome_process = None
         self._running = False
+        self._api: InstagramAPI | None = None
 
         # Fila de tarefas para a worker thread do Playwright
         self._task_queue: queue.Queue = queue.Queue()
@@ -75,11 +78,25 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=13),
             text_color="gray",
         )
-        subtitle.pack(pady=(0, 14))
+        subtitle.pack(pady=(0, 10))
+
+        # ── Abas ──────────────────────────────────────────────────────────
+        self.tabview = ctk.CTkTabview(self, width=710, height=560)
+        self.tabview.pack(padx=20, pady=(0, 10), fill="both", expand=True)
+
+        self.tab_bot = self.tabview.add("Bot de Follow")
+        self.tab_dashboard = self.tabview.add("Dashboard de Métricas")
+
+        self._build_bot_tab()
+        self._build_dashboard_tab()
+
+    def _build_bot_tab(self) -> None:
+        """Constrói a aba do bot de follow."""
+        tab = self.tab_bot
 
         # ── Frame de configuração ────────────────────────────────────────
-        config_frame = ctk.CTkFrame(self)
-        config_frame.pack(padx=20, pady=(0, 10), fill="x")
+        config_frame = ctk.CTkFrame(tab)
+        config_frame.pack(padx=10, pady=(5, 8), fill="x")
 
         ctk.CTkLabel(
             config_frame,
@@ -134,8 +151,8 @@ class App(ctk.CTk):
         )
 
         # ── Botões ───────────────────────────────────────────────────────
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(padx=20, pady=(0, 6), fill="x")
+        btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_frame.pack(padx=10, pady=(0, 6), fill="x")
 
         self.login_btn = ctk.CTkButton(
             btn_frame,
@@ -174,18 +191,153 @@ class App(ctk.CTk):
         self.stop_btn.pack(side="left")
 
         # ── Barra de progresso ───────────────────────────────────────────
-        self.progress = ctk.CTkProgressBar(self, width=660)
-        self.progress.pack(padx=20, pady=(4, 2))
+        self.progress = ctk.CTkProgressBar(tab, width=660)
+        self.progress.pack(padx=10, pady=(4, 2))
         self.progress.set(0)
 
         self.progress_label = ctk.CTkLabel(
-            self, text="Pronto", font=ctk.CTkFont(size=12), text_color="gray"
+            tab, text="Pronto", font=ctk.CTkFont(size=12), text_color="gray"
         )
         self.progress_label.pack(pady=(0, 4))
 
         # ── Log ──────────────────────────────────────────────────────────
-        self.log_box = ctk.CTkTextbox(self, width=660, height=200, state="disabled")
-        self.log_box.pack(padx=20, pady=(0, 14))
+        self.log_box = ctk.CTkTextbox(tab, width=660, height=170, state="disabled")
+        self.log_box.pack(padx=10, pady=(0, 10))
+
+    def _build_dashboard_tab(self) -> None:
+        """Constrói a aba do dashboard de métricas."""
+        tab = self.tab_dashboard
+
+        # ── Token de acesso ──────────────────────────────────────────────
+        token_frame = ctk.CTkFrame(tab)
+        token_frame.pack(padx=10, pady=(5, 8), fill="x")
+
+        ctk.CTkLabel(
+            token_frame,
+            text="Access Token do Meta:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
+
+        self.token_entry = ctk.CTkEntry(
+            token_frame, placeholder_text="Cole seu token aqui", width=400, show="*"
+        )
+        self.token_entry.grid(row=0, column=1, padx=12, pady=(12, 4), sticky="w")
+
+        help_label = ctk.CTkLabel(
+            token_frame,
+            text="Obtenha em: developers.facebook.com/tools/explorer",
+            font=ctk.CTkFont(size=11),
+            text_color="#2196F3",
+            cursor="hand2",
+        )
+        help_label.grid(
+            row=1, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w"
+        )
+
+        # ── Botões do dashboard ──────────────────────────────────────────
+        dash_btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        dash_btn_frame.pack(padx=10, pady=(0, 8), fill="x")
+
+        self.connect_api_btn = ctk.CTkButton(
+            dash_btn_frame,
+            text="Conectar à API",
+            command=self._on_connect_api,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#2196F3",
+            hover_color="#1976D2",
+        )
+        self.connect_api_btn.pack(side="left", padx=(0, 10))
+
+        self.refresh_btn = ctk.CTkButton(
+            dash_btn_frame,
+            text="Atualizar Métricas",
+            command=self._on_refresh_metrics,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#4CAF50",
+            hover_color="#388E3C",
+        )
+        self.refresh_btn.pack(side="left", padx=(0, 10))
+
+        self.history_btn = ctk.CTkButton(
+            dash_btn_frame,
+            text="Ver Histórico",
+            command=self._on_show_history,
+            width=140,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+        )
+        self.history_btn.pack(side="left")
+
+        # ── Cards de métricas ────────────────────────────────────────────
+        cards_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        cards_frame.pack(padx=10, pady=(0, 8), fill="x")
+
+        self.card_followers = self._create_metric_card(
+            cards_frame, "Seguidores", "---", "#4CAF50"
+        )
+        self.card_followers.pack(side="left", padx=(0, 8), expand=True, fill="x")
+
+        self.card_following = self._create_metric_card(
+            cards_frame, "Seguindo", "---", "#2196F3"
+        )
+        self.card_following.pack(side="left", padx=(0, 8), expand=True, fill="x")
+
+        self.card_posts = self._create_metric_card(
+            cards_frame, "Posts", "---", "#FF9800"
+        )
+        self.card_posts.pack(side="left", padx=(0, 8), expand=True, fill="x")
+
+        self.card_change = self._create_metric_card(
+            cards_frame, "Variação", "---", "#9C27B0"
+        )
+        self.card_change.pack(side="left", expand=True, fill="x")
+
+        # ── Info do perfil ───────────────────────────────────────────────
+        self.profile_info_label = ctk.CTkLabel(
+            tab,
+            text="Conecte à API para ver métricas do seu perfil",
+            font=ctk.CTkFont(size=13),
+            text_color="gray",
+        )
+        self.profile_info_label.pack(pady=(4, 4))
+
+        # ── Log do dashboard ────────────────────────────────────────────
+        self.dash_log = ctk.CTkTextbox(tab, width=660, height=140, state="disabled")
+        self.dash_log.pack(padx=10, pady=(0, 10))
+
+    def _create_metric_card(
+        self, parent, title: str, value: str, color: str
+    ) -> ctk.CTkFrame:
+        """Cria um card de métrica para o dashboard."""
+        card = ctk.CTkFrame(parent, corner_radius=10)
+
+        ctk.CTkLabel(
+            card,
+            text=title,
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(pady=(10, 0))
+
+        label = ctk.CTkLabel(
+            card,
+            text=value,
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color=color,
+        )
+        label.pack(pady=(0, 10))
+
+        card._value_label = label
+        return card
+
+    def _update_card(self, card: ctk.CTkFrame, value: str) -> None:
+        """Atualiza o valor exibido em um card de métrica."""
+        card._value_label.configure(text=value)
 
     # ── Callbacks ────────────────────────────────────────────────────────
 
@@ -198,6 +350,15 @@ class App(ctk.CTk):
     def _safe_log(self, msg: str) -> None:
         self.after(0, self._append_log, msg)
 
+    def _append_dash_log(self, msg: str) -> None:
+        self.dash_log.configure(state="normal")
+        self.dash_log.insert("end", msg + "\n")
+        self.dash_log.see("end")
+        self.dash_log.configure(state="disabled")
+
+    def _safe_dash_log(self, msg: str) -> None:
+        self.after(0, self._append_dash_log, msg)
+
     def _safe_progress(self, current: int, total: int) -> None:
         def _update():
             if total > 0:
@@ -205,6 +366,8 @@ class App(ctk.CTk):
             self.progress_label.configure(text=f"Seguidos: {current} / {total}")
 
         self.after(0, _update)
+
+    # ── Bot callbacks ────────────────────────────────────────────────────
 
     def _on_open_chrome(self) -> None:
         """Abre o Chrome com debug e conecta via CDP."""
@@ -301,6 +464,130 @@ class App(ctk.CTk):
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
         self.login_btn.configure(state="normal")
+
+    # ── Dashboard callbacks ──────────────────────────────────────────────
+
+    def _on_connect_api(self) -> None:
+        """Conecta à Instagram Graph API com o token fornecido."""
+        token = self.token_entry.get().strip()
+        if not token:
+            self._safe_dash_log("Cole o Access Token do Meta para conectar.")
+            return
+
+        self.connect_api_btn.configure(state="disabled")
+        self._safe_dash_log("Conectando à API do Instagram...")
+
+        def _connect():
+            try:
+                self._api = InstagramAPI(access_token=token)
+                ig_user_id = self._api.discover_user_id()
+                self._safe_dash_log(f"Conectado! IG User ID: {ig_user_id}")
+
+                metrics = self._api.record_metrics()
+                self._display_metrics(metrics)
+
+                self.after(0, lambda: self.refresh_btn.configure(state="normal"))
+                self.after(0, lambda: self.history_btn.configure(state="normal"))
+                self._safe_dash_log("Métricas carregadas com sucesso!")
+
+            except Exception as exc:
+                self._safe_dash_log(f"Erro: {exc}")
+                self.after(0, lambda: self.connect_api_btn.configure(state="normal"))
+
+        threading.Thread(target=_connect, daemon=True).start()
+
+    def _on_refresh_metrics(self) -> None:
+        """Atualiza as métricas do perfil."""
+        if not self._api:
+            self._safe_dash_log("Conecte à API primeiro.")
+            return
+
+        self.refresh_btn.configure(state="disabled")
+        self._safe_dash_log("Atualizando métricas...")
+
+        def _refresh():
+            try:
+                metrics = self._api.record_metrics()
+                self._display_metrics(metrics)
+                self._safe_dash_log("Métricas atualizadas!")
+            except Exception as exc:
+                self._safe_dash_log(f"Erro ao atualizar: {exc}")
+            finally:
+                self.after(0, lambda: self.refresh_btn.configure(state="normal"))
+
+        threading.Thread(target=_refresh, daemon=True).start()
+
+    def _on_show_history(self) -> None:
+        """Mostra o histórico de métricas."""
+        if not self._api:
+            return
+
+        change_data = self._api.get_followers_change()
+        history = self._api.get_history()
+
+        self._safe_dash_log("=" * 50)
+        self._safe_dash_log(f"Histórico de métricas ({change_data['records']} registros)")
+        self._safe_dash_log("-" * 50)
+
+        if change_data["records"] >= 2:
+            sign = "+" if change_data["change"] >= 0 else ""
+            self._safe_dash_log(
+                f"Última variação: {sign}{change_data['change']} seguidores"
+            )
+            total_sign = "+" if change_data.get("total_change", 0) >= 0 else ""
+            self._safe_dash_log(
+                f"Variação total: {total_sign}{change_data.get('total_change', 0)} seguidores"
+            )
+            self._safe_dash_log(
+                f"Desde: {change_data.get('first_record', 'N/A')}"
+            )
+
+        self._safe_dash_log("-" * 50)
+
+        for entry in history[-10:]:
+            ts = entry.get("timestamp", "")[:19].replace("T", " ")
+            followers = entry.get("followers_count", 0)
+            following = entry.get("follows_count", 0)
+            self._safe_dash_log(f"  {ts} | Seg: {followers} | Sdo: {following}")
+
+        if len(history) > 10:
+            self._safe_dash_log(f"  ... e mais {len(history) - 10} registros anteriores")
+
+        self._safe_dash_log("=" * 50)
+
+    def _display_metrics(self, metrics: dict) -> None:
+        """Atualiza os cards e labels com as métricas."""
+        def _update():
+            self._update_card(
+                self.card_followers,
+                f"{metrics.get('followers_count', 0):,}".replace(",", "."),
+            )
+            self._update_card(
+                self.card_following,
+                f"{metrics.get('follows_count', 0):,}".replace(",", "."),
+            )
+            self._update_card(
+                self.card_posts,
+                f"{metrics.get('media_count', 0):,}".replace(",", "."),
+            )
+
+            change_data = self._api.get_followers_change()
+            if change_data["records"] >= 2:
+                change = change_data["change"]
+                sign = "+" if change >= 0 else ""
+                self._update_card(self.card_change, f"{sign}{change}")
+            else:
+                self._update_card(self.card_change, "---")
+
+            username = metrics.get("username", "")
+            name = metrics.get("name", "")
+            if username:
+                self.profile_info_label.configure(
+                    text=f"@{username} — {name}",
+                    text_color="white",
+                )
+
+        self.after(0, _update)
 
     # ── Helpers de config ────────────────────────────────────────────────
 
