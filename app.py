@@ -12,7 +12,7 @@ import threading
 import customtkinter as ctk
 
 from bot import InstagramBot, launch_chrome_with_debug
-from instagram_api import InstagramAPI
+from instagram_api import InstagramAPI, load_token_data
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -22,7 +22,7 @@ class App(ctk.CTk):
     """Janela principal do aplicativo."""
 
     WIDTH = 750
-    HEIGHT = 680
+    HEIGHT = 700
 
     def __init__(self):
         super().__init__()
@@ -41,6 +41,7 @@ class App(ctk.CTk):
         self._worker.start()
 
         self._build_ui()
+        self._try_load_saved_token()
 
     # ── Worker thread (todas as operações Playwright aqui) ───────────────
 
@@ -81,7 +82,7 @@ class App(ctk.CTk):
         subtitle.pack(pady=(0, 10))
 
         # ── Abas ──────────────────────────────────────────────────────────
-        self.tabview = ctk.CTkTabview(self, width=710, height=560)
+        self.tabview = ctk.CTkTabview(self, width=710, height=580)
         self.tabview.pack(padx=20, pady=(0, 10), fill="both", expand=True)
 
         self.tab_bot = self.tabview.add("Bot de Follow")
@@ -223,15 +224,66 @@ class App(ctk.CTk):
         )
         self.token_entry.grid(row=0, column=1, padx=12, pady=(12, 4), sticky="w")
 
+        # Status do token
+        self.token_status_label = ctk.CTkLabel(
+            token_frame,
+            text="Nenhum token salvo",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        )
+        self.token_status_label.grid(
+            row=1, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="w"
+        )
+
+        # Token longa duração
+        long_token_frame = ctk.CTkFrame(token_frame, fg_color="transparent")
+        long_token_frame.grid(
+            row=2, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="w"
+        )
+
+        ctk.CTkLabel(
+            long_token_frame,
+            text="App ID:",
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", padx=(0, 4))
+
+        self.app_id_entry = ctk.CTkEntry(
+            long_token_frame, placeholder_text="ID do App", width=140
+        )
+        self.app_id_entry.pack(side="left", padx=(0, 8))
+
+        ctk.CTkLabel(
+            long_token_frame,
+            text="App Secret:",
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", padx=(0, 4))
+
+        self.app_secret_entry = ctk.CTkEntry(
+            long_token_frame, placeholder_text="Secret do App", width=140, show="*"
+        )
+        self.app_secret_entry.pack(side="left", padx=(0, 8))
+
+        self.long_token_btn = ctk.CTkButton(
+            long_token_frame,
+            text="Gerar Token 60 dias",
+            command=self._on_exchange_token,
+            width=140,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#FF9800",
+            hover_color="#F57C00",
+            state="disabled",
+        )
+        self.long_token_btn.pack(side="left")
+
         help_label = ctk.CTkLabel(
             token_frame,
-            text="Obtenha em: developers.facebook.com/tools/explorer",
-            font=ctk.CTkFont(size=11),
+            text="Token salvo localmente. App ID/Secret em: Configurações > Básico no painel do Meta",
+            font=ctk.CTkFont(size=10),
             text_color="#2196F3",
-            cursor="hand2",
         )
         help_label.grid(
-            row=1, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w"
+            row=3, column=0, columnspan=2, padx=12, pady=(0, 10), sticky="w"
         )
 
         # ── Botões do dashboard ──────────────────────────────────────────
@@ -242,37 +294,49 @@ class App(ctk.CTk):
             dash_btn_frame,
             text="Conectar à API",
             command=self._on_connect_api,
-            width=160,
+            width=140,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#2196F3",
             hover_color="#1976D2",
         )
-        self.connect_api_btn.pack(side="left", padx=(0, 10))
+        self.connect_api_btn.pack(side="left", padx=(0, 8))
 
         self.refresh_btn = ctk.CTkButton(
             dash_btn_frame,
             text="Atualizar Métricas",
             command=self._on_refresh_metrics,
-            width=160,
+            width=140,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
             fg_color="#4CAF50",
             hover_color="#388E3C",
         )
-        self.refresh_btn.pack(side="left", padx=(0, 10))
+        self.refresh_btn.pack(side="left", padx=(0, 8))
 
         self.history_btn = ctk.CTkButton(
             dash_btn_frame,
             text="Ver Histórico",
             command=self._on_show_history,
-            width=140,
+            width=120,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
         )
-        self.history_btn.pack(side="left")
+        self.history_btn.pack(side="left", padx=(0, 8))
+
+        self.clear_token_btn = ctk.CTkButton(
+            dash_btn_frame,
+            text="Limpar Token",
+            command=self._on_clear_token,
+            width=110,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#757575",
+            hover_color="#616161",
+        )
+        self.clear_token_btn.pack(side="left")
 
         # ── Cards de métricas ────────────────────────────────────────────
         cards_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -308,7 +372,7 @@ class App(ctk.CTk):
         self.profile_info_label.pack(pady=(4, 4))
 
         # ── Log do dashboard ────────────────────────────────────────────
-        self.dash_log = ctk.CTkTextbox(tab, width=660, height=140, state="disabled")
+        self.dash_log = ctk.CTkTextbox(tab, width=660, height=110, state="disabled")
         self.dash_log.pack(padx=10, pady=(0, 10))
 
     def _create_metric_card(
@@ -338,6 +402,38 @@ class App(ctk.CTk):
     def _update_card(self, card: ctk.CTkFrame, value: str) -> None:
         """Atualiza o valor exibido em um card de métrica."""
         card._value_label.configure(text=value)
+
+    # ── Token persistence ────────────────────────────────────────────────
+
+    def _try_load_saved_token(self) -> None:
+        """Tenta carregar token salvo anteriormente."""
+        token_data = load_token_data()
+        if not token_data:
+            return
+
+        token = token_data.get("access_token", "")
+        if not token:
+            return
+
+        self.token_entry.insert(0, token)
+
+        is_long = token_data.get("is_long_lived", False)
+        created = token_data.get("created_at", "")[:19].replace("T", " ")
+        ig_user_id = token_data.get("ig_user_id", "")
+
+        if is_long:
+            status = f"Token de longa duração salvo ({created})"
+            color = "#4CAF50"
+        else:
+            status = f"Token salvo ({created}) — gere um de longa duração!"
+            color = "#FF9800"
+
+        self.token_status_label.configure(text=status, text_color=color)
+
+        # Auto-conectar se tiver IG User ID salvo
+        if ig_user_id:
+            self._api = InstagramAPI(access_token=token, ig_user_id=ig_user_id)
+            self._safe_dash_log("Token salvo encontrado! Clique 'Conectar à API' para carregar métricas.")
 
     # ── Callbacks ────────────────────────────────────────────────────────
 
@@ -483,11 +579,21 @@ class App(ctk.CTk):
                 ig_user_id = self._api.discover_user_id()
                 self._safe_dash_log(f"Conectado! IG User ID: {ig_user_id}")
 
+                # Salvar token localmente
+                self._api.save_current_token()
+                self._safe_dash_log("Token salvo localmente!")
+
+                self.after(0, lambda: self.token_status_label.configure(
+                    text="Token salvo com sucesso!",
+                    text_color="#4CAF50",
+                ))
+
                 metrics = self._api.record_metrics()
                 self._display_metrics(metrics)
 
                 self.after(0, lambda: self.refresh_btn.configure(state="normal"))
                 self.after(0, lambda: self.history_btn.configure(state="normal"))
+                self.after(0, lambda: self.long_token_btn.configure(state="normal"))
                 self._safe_dash_log("Métricas carregadas com sucesso!")
 
             except Exception as exc:
@@ -495,6 +601,68 @@ class App(ctk.CTk):
                 self.after(0, lambda: self.connect_api_btn.configure(state="normal"))
 
         threading.Thread(target=_connect, daemon=True).start()
+
+    def _on_exchange_token(self) -> None:
+        """Troca o token por um de longa duração (60 dias)."""
+        if not self._api:
+            self._safe_dash_log("Conecte à API primeiro.")
+            return
+
+        app_id = self.app_id_entry.get().strip()
+        app_secret = self.app_secret_entry.get().strip()
+
+        if not app_id or not app_secret:
+            self._safe_dash_log(
+                "Preencha o App ID e App Secret. "
+                "Encontre em: Painel do Meta > Configurações > Básico"
+            )
+            return
+
+        self.long_token_btn.configure(state="disabled")
+        self._safe_dash_log("Trocando por token de longa duração...")
+
+        def _exchange():
+            try:
+                result = self._api.exchange_for_long_lived_token(app_id, app_secret)
+                expires_days = result.get("expires_in", 0) // 86400
+                self._safe_dash_log(
+                    f"Token de longa duração gerado! Válido por {expires_days} dias."
+                )
+
+                # Atualizar campo de token
+                self.after(0, self._update_token_display, result["access_token"])
+                self.after(0, lambda: self.token_status_label.configure(
+                    text=f"Token de longa duração ({expires_days} dias)",
+                    text_color="#4CAF50",
+                ))
+
+            except Exception as exc:
+                self._safe_dash_log(f"Erro ao trocar token: {exc}")
+            finally:
+                self.after(0, lambda: self.long_token_btn.configure(state="normal"))
+
+        threading.Thread(target=_exchange, daemon=True).start()
+
+    def _update_token_display(self, new_token: str) -> None:
+        """Atualiza o campo de token na UI."""
+        self.token_entry.delete(0, "end")
+        self.token_entry.insert(0, new_token)
+
+    def _on_clear_token(self) -> None:
+        """Limpa o token salvo."""
+        from instagram_api import clear_token_data
+
+        clear_token_data()
+        self.token_entry.delete(0, "end")
+        self._api = None
+        self.token_status_label.configure(
+            text="Token removido", text_color="gray"
+        )
+        self.refresh_btn.configure(state="disabled")
+        self.history_btn.configure(state="disabled")
+        self.long_token_btn.configure(state="disabled")
+        self.connect_api_btn.configure(state="normal")
+        self._safe_dash_log("Token limpo. Cole um novo token para conectar.")
 
     def _on_refresh_metrics(self) -> None:
         """Atualiza as métricas do perfil."""
