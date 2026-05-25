@@ -134,9 +134,9 @@ def generate_affiliate_link(product_url: str, affiliate_tag: str) -> str:
     """Gera o link de afiliado a partir da URL do produto.
 
     affiliate_tag pode ser:
-    - Formato matt: "matt:USERNAME:TOOLID"
+    - Número direto do matt_tool: "38524122"
+    - Formato matt: "matt:USERNAME:TOOLID" ou "matt::TOOLID"
     - Formato simples: "SEUNOME-20"
-    - Formato URL com params já prontos
     """
     parsed = urlparse(product_url)
 
@@ -148,15 +148,22 @@ def generate_affiliate_link(product_url: str, affiliate_tag: str) -> str:
         if not k.startswith("matt_") and k != "tag"
     }
 
-    if affiliate_tag.startswith("matt:"):
-        parts = affiliate_tag.split(":")
-        if len(parts) >= 3:
-            clean_params["matt_tool"] = parts[2]
-            clean_params["matt_word"] = ""
-            clean_params["matt_source"] = ""
-            clean_params["matt_campaign_id"] = ""
+    tag = affiliate_tag.strip()
+
+    if tag.startswith("matt:"):
+        parts = tag.split(":")
+        tool_id = parts[-1]
+        clean_params["matt_tool"] = tool_id
+        clean_params["matt_word"] = ""
+        clean_params["matt_source"] = ""
+        clean_params["matt_campaign_id"] = ""
+    elif tag.isdigit():
+        clean_params["matt_tool"] = tag
+        clean_params["matt_word"] = ""
+        clean_params["matt_source"] = ""
+        clean_params["matt_campaign_id"] = ""
     else:
-        clean_params["tag"] = affiliate_tag
+        clean_params["tag"] = tag
 
     new_query = urlencode(clean_params)
     new_url = urlunparse((
