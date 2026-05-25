@@ -18,6 +18,8 @@ Este projeto é **apenas para fins educacionais**. O uso de automação viola os
 - **Barra de progresso** e log em tempo real
 - **Botão de parar** para interromper a qualquer momento
 - **Dashboard de métricas**: acompanhe seguidores ganhos/perdidos via Instagram Graph API (requer conta profissional)
+- **Limpar Desumildes**: deixa de seguir quem não segue de volta após X dias
+- **Radar de Ofertas**: extraia dados de produtos do Mercado Livre, gere links de afiliado e poste como story/post no Instagram
 
 ## Como funciona
 
@@ -31,6 +33,26 @@ Este projeto é **apenas para fins educacionais**. O uso de automação viola os
    - Se sim, segue o perfil (maior chance de follow-back)
    - Se não, pula para o próximo
 
+### Limpar Desumildes (Unfollow)
+
+1. Na aba **"Limpar Desumildes"**, coloque seu @ e o número de dias mínimos (padrão: 3)
+2. Na **primeira execução**, o bot mapeia todos que você segue e registra com a data de hoje
+3. Após X dias, execute novamente — o bot verifica quem não segue de volta e faz unfollow
+4. Os registros ficam salvos em `~/.instafollow_bot/follow_log.json`
+
+### Radar de Ofertas (Mercado Livre → Instagram)
+
+1. Conecte o bot (aba Bot de Follow → Conectar Bot)
+2. Na aba **"Radar de Ofertas"**, cole a URL de um produto do Mercado Livre
+3. Preencha sua **tag de afiliado** (encontre no Portal do Afiliado do ML)
+4. Clique **"Extrair Dados"** — o bot abre o produto e captura título, preço e imagem
+5. Escolha uma ação:
+   - **Postar Story**: publica a imagem do produto como story no Instagram (via API)
+   - **Postar no Feed**: publica como post com legenda e link de afiliado (via API)
+   - **Copiar p/ WhatsApp**: copia mensagem formatada para compartilhar
+
+**Nota**: Para postar no Instagram via API, você precisa da permissão `instagram_business_content_publish` no seu token do Meta.
+
 ### Dashboard de Métricas
 
 Para usar o dashboard, você precisa de uma **conta profissional** (Business/Creator) no Instagram:
@@ -40,7 +62,7 @@ Para usar o dashboard, você precisa de uma **conta profissional** (Business/Cre
 3. Use **"Atualizar Métricas"** para registrar novos dados
 4. Use **"Ver Histórico"** para acompanhar a evolução dos seguidores
 
-Para obter o Access Token: acesse [Graph API Explorer](https://developers.facebook.com/tools/explorer/), selecione seu app e as permissões `instagram_business_basic` e `instagram_business_manage_insights`.
+Para obter o Access Token: acesse [Graph API Explorer](https://developers.facebook.com/tools/explorer/), selecione seu app e as permissões `instagram_business_basic`, `instagram_business_manage_insights` e `instagram_business_content_publish`.
 
 ## Pré-requisitos
 
@@ -99,7 +121,8 @@ O executável será gerado na pasta `dist/`.
 radardaspromos/
 ├── app.py                # Aplicativo GUI (CustomTkinter)
 ├── bot.py                # Lógica do bot (Playwright + CDP)
-├── instagram_api.py      # Módulo de métricas (Instagram Graph API)
+├── instagram_api.py      # Módulo de métricas + stories (Instagram Graph API)
+├── mercadolivre.py       # Extração de dados do Mercado Livre + link de afiliado
 ├── instagram_follow.py   # Versão CLI (linha de comando)
 ├── requirements.txt      # Dependências Python
 ├── .env.example          # Template de configuração (para CLI)

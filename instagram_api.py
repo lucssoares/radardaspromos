@@ -3,10 +3,12 @@
 Permite obter métricas do perfil como seguidores, seguindo, posts,
 e acompanhar a evolução dos seguidores ao longo do tempo.
 Inclui gerenciamento de tokens (salvar, trocar por longa duração, renovar).
+Suporta publicação de stories via API.
 """
 
 import json
 import os
+import time
 from datetime import datetime
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -65,6 +67,22 @@ class InstagramAPI:
         except HTTPError as exc:
             body = exc.read().decode()
             raise RuntimeError(f"Erro na API ({exc.code}): {body}") from exc
+
+    def _post_request(self, url: str, data: dict) -> dict:
+        """Faz uma requisição POST à API."""
+        data["access_token"] = self.access_token
+        body = urlencode(data).encode("utf-8")
+        req = Request(url, data=body, method="POST")
+        req.add_header("User-Agent", "InstaFollowBot/1.0")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except HTTPError as exc:
+            resp_body = exc.read().decode()
+            raise RuntimeError(
+                f"Erro na API ({exc.code}): {resp_body}"
+            ) from exc
 
     # ── Token de longa duração ───────────────────────────────────────────
 
@@ -221,6 +239,119 @@ class InstagramAPI:
             "follows_count": bd.get("follows_count", 0),
             "media_count": bd.get("media_count", 0),
         }
+
+    # ── Publicação de Stories ─────────────────────────────────────────────
+
+    def publish_story(self, image_url: str) -> dict:
+        """Publica um story com imagem via Instagram Graph API.
+
+        A imagem deve estar em uma URL pública acessível.
+        Retorna dict com 'id' do media publicado.
+
+        Requer permissão: instagram_business_content_publish
+        """
+        if not self.ig_user_id:
+            self.discover_user_id()
+
+        # Passo 1: Criar container do story
+        container_url = f"{BASE_URL}/{self.ig_user_id}/media"
+        container_data = {
+            "image_url": image_url,
+            "media_type": "STORIES",
+        }
+
+        container_result = self._post_request(container_url, container_data)
+        container_id = container_result.get("id")
+
+        if not container_id:
+            raise RuntimeError(
+                f"Falha ao criar container: {container_result}"
+            )
+
+        # Passo 2: Aguardar processamento (polling)
+        status_url = (
+            f"{BASE_URL}/{container_id}"
+            f"?fields=status_code"
+        )
+        for _ in range(30):
+            time.sleep(2)
+            status = self._request(status_url)
+            status_code = status.get("status_code", "")
+            if status_code == "FINISHED":
+                break
+            if status_code == "ERROR":
+                raise RuntimeError(
+                    f"Erro no processamento do story: {status}"
+                )
+        else:
+            raise RuntimeError("Timeout no processamento do story")
+
+        # Passo 3: Publicar o container
+        publish_url = f"{BASE_URL}/{self.ig_user_id}/media_publish"
+        publish_data = {"creation_id": container_id}
+
+        result = self._post_request(publish_url, publish_data)
+
+        if not result.get("id"):
+            raise RuntimeError(f"Falha ao publicar story: {result}")
+
+        return result
+
+    def publish_feed_post(
+        self, image_url: str, caption: str = ""
+    ) -> dict:
+        """Publica um post no feed via Instagram Graph API.
+
+        A imagem deve estar em uma URL pública acessível.
+        Retorna dict com 'id' do media publicado.
+
+        Requer permissão: instagram_business_content_publish
+        """
+        if not self.ig_user_id:
+            self.discover_user_id()
+
+        # Passo 1: Criar container do post
+        container_url = f"{BASE_URL}/{self.ig_user_id}/media"
+        container_data = {"image_url": image_url}
+        if caption:
+            container_data["caption"] = caption
+
+        container_result = self._post_request(container_url, container_data)
+        container_id = container_result.get("id")
+
+        if not container_id:
+            raise RuntimeError(
+                f"Falha ao criar container: {container_result}"
+            )
+
+        # Passo 2: Aguardar processamento
+        status_url = (
+            f"{BASE_URL}/{container_id}"
+            f"?fields=status_code"
+        )
+        for _ in range(30):
+            time.sleep(2)
+            status = self._request(status_url)
+            status_code = status.get("status_code", "")
+            if status_code == "FINISHED":
+                break
+            if status_code == "ERROR":
+                raise RuntimeError(
+                    f"Erro no processamento do post: {status}"
+                )
+        else:
+            raise RuntimeError("Timeout no processamento do post")
+
+        # Passo 3: Publicar
+        publish_url = f"{BASE_URL}/{self.ig_user_id}/media_publish"
+        publish_data = {"creation_id": container_id}
+
+        result = self._post_request(publish_url, publish_data)
+
+        if not result.get("id"):
+            raise RuntimeError(f"Falha ao publicar post: {result}")
+
+        return result
 
     # ── Histórico de métricas ────────────────────────────────────────────
 

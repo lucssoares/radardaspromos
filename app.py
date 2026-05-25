@@ -18,6 +18,11 @@ from bot import (
     load_follow_log,
 )
 from instagram_api import InstagramAPI, load_token_data
+from mercadolivre import (
+    extract_product_data,
+    format_whatsapp_message,
+    generate_affiliate_link,
+)
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -26,8 +31,8 @@ ctk.set_default_color_theme("blue")
 class App(ctk.CTk):
     """Janela principal do aplicativo."""
 
-    WIDTH = 750
-    HEIGHT = 700
+    WIDTH = 780
+    HEIGHT = 750
 
     def __init__(self):
         super().__init__()
@@ -92,10 +97,12 @@ class App(ctk.CTk):
 
         self.tab_bot = self.tabview.add("Bot de Follow")
         self.tab_unfollow = self.tabview.add("Limpar Desumildes")
+        self.tab_offers = self.tabview.add("Radar de Ofertas")
         self.tab_dashboard = self.tabview.add("Dashboard de Métricas")
 
         self._build_bot_tab()
         self._build_unfollow_tab()
+        self._build_offers_tab()
         self._build_dashboard_tab()
 
     def _build_bot_tab(self) -> None:
@@ -356,6 +363,150 @@ class App(ctk.CTk):
         else:
             text = f"{count} follows registrados no histórico."
         self.follow_count_label.configure(text=text)
+
+    def _build_offers_tab(self) -> None:
+        """Constrói a aba do Radar de Ofertas (ML → Instagram)."""
+        tab = self.tab_offers
+
+        ctk.CTkLabel(
+            tab,
+            text="Radar de Ofertas",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(pady=(10, 2))
+
+        ctk.CTkLabel(
+            tab,
+            text="Extraia ofertas do Mercado Livre e poste no Instagram",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        ).pack(pady=(0, 8))
+
+        # ── Configuração ──────────────────────────────────────────────────
+        config_frame = ctk.CTkFrame(tab)
+        config_frame.pack(padx=10, pady=(0, 6), fill="x")
+
+        ctk.CTkLabel(
+            config_frame,
+            text="URL do produto (ML):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
+
+        self.ml_url_entry = ctk.CTkEntry(
+            config_frame,
+            placeholder_text="Cole a URL do produto do Mercado Livre",
+            width=450,
+        )
+        self.ml_url_entry.grid(
+            row=0, column=1, padx=12, pady=(12, 4), sticky="w"
+        )
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Tag de afiliado:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=1, column=0, padx=12, pady=4, sticky="w")
+
+        self.affiliate_tag_entry = ctk.CTkEntry(
+            config_frame,
+            placeholder_text="matt:USERNAME:TOOLID ou TAG-20",
+            width=300,
+        )
+        self.affiliate_tag_entry.grid(
+            row=1, column=1, padx=12, pady=4, sticky="w"
+        )
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Encontre sua tag gerando um link no Portal do Afiliado",
+            font=ctk.CTkFont(size=10),
+            text_color="#2196F3",
+        ).grid(
+            row=2, column=0, columnspan=2, padx=12, pady=(0, 10), sticky="w"
+        )
+
+        # ── Botões ────────────────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_frame.pack(padx=10, pady=(0, 4), fill="x")
+
+        self.extract_btn = ctk.CTkButton(
+            btn_frame,
+            text="1. Extrair Dados",
+            command=self._on_extract_product,
+            width=150,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#FF9800",
+            hover_color="#F57C00",
+        )
+        self.extract_btn.pack(side="left", padx=(0, 8))
+
+        self.post_story_btn = ctk.CTkButton(
+            btn_frame,
+            text="2. Postar Story",
+            command=self._on_post_story,
+            width=150,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#E91E63",
+            hover_color="#C2185B",
+        )
+        self.post_story_btn.pack(side="left", padx=(0, 8))
+
+        self.post_feed_btn = ctk.CTkButton(
+            btn_frame,
+            text="Postar no Feed",
+            command=self._on_post_feed,
+            width=140,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#4CAF50",
+            hover_color="#388E3C",
+        )
+        self.post_feed_btn.pack(side="left", padx=(0, 8))
+
+        self.copy_whatsapp_btn = ctk.CTkButton(
+            btn_frame,
+            text="Copiar p/ WhatsApp",
+            command=self._on_copy_whatsapp,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#25D366",
+            hover_color="#128C7E",
+        )
+        self.copy_whatsapp_btn.pack(side="left")
+
+        # ── Preview do produto ───────────────────────────────────────────
+        self.product_preview_label = ctk.CTkLabel(
+            tab,
+            text="Cole a URL de um produto e clique 'Extrair Dados'",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        )
+        self.product_preview_label.pack(pady=(4, 2))
+
+        # ── Link de afiliado gerado ──────────────────────────────────────
+        self.affiliate_link_label = ctk.CTkLabel(
+            tab,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#4CAF50",
+            wraplength=650,
+        )
+        self.affiliate_link_label.pack(pady=(0, 2))
+
+        # ── Log ──────────────────────────────────────────────────────────
+        self.offers_log_box = ctk.CTkTextbox(
+            tab, width=660, height=160, state="disabled"
+        )
+        self.offers_log_box.pack(padx=10, pady=(4, 10))
+
+        # Dados do produto extraído (armazenados temporariamente)
+        self._current_product: dict | None = None
+        self._current_affiliate_link: str = ""
 
     def _build_dashboard_tab(self) -> None:
         """Constrói a aba do dashboard de métricas."""
@@ -792,6 +943,235 @@ class App(ctk.CTk):
         self.unfollow_btn.configure(state="normal")
         self.unfollow_stop_btn.configure(state="disabled")
         self.unfollow_connect_btn.configure(state="normal")
+
+    # ── Ofertas callbacks ─────────────────────────────────────────────────
+
+    def _append_offers_log(self, msg: str) -> None:
+        self.offers_log_box.configure(state="normal")
+        self.offers_log_box.insert("end", msg + "\n")
+        self.offers_log_box.see("end")
+        self.offers_log_box.configure(state="disabled")
+
+    def _safe_offers_log(self, msg: str) -> None:
+        self.after(0, self._append_offers_log, msg)
+
+    def _on_extract_product(self) -> None:
+        """Extrai dados do produto do Mercado Livre via Playwright."""
+        url = self.ml_url_entry.get().strip()
+        if not url:
+            self._append_offers_log("Cole a URL do produto do Mercado Livre!")
+            return
+
+        if "mercadolivre.com.br" not in url and "mercadolibre.com" not in url:
+            self._append_offers_log(
+                "URL inválida. Use uma URL do Mercado Livre."
+            )
+            return
+
+        if not self._bot or not self._bot._page:
+            self._append_offers_log(
+                "Bot não conectado! Use 'Conectar Bot' na aba Bot de Follow."
+            )
+            return
+
+        self.extract_btn.configure(state="disabled")
+        self._safe_offers_log("Extraindo dados do produto...")
+
+        def _task():
+            try:
+                data = extract_product_data(
+                    self._bot._page, url, on_log=self._safe_offers_log
+                )
+
+                if not data:
+                    self._safe_offers_log("Falha ao extrair dados.")
+                    self.after(
+                        0, lambda: self.extract_btn.configure(state="normal")
+                    )
+                    return
+
+                self._current_product = data
+
+                tag = self.affiliate_tag_entry.get().strip()
+                if tag:
+                    self._current_affiliate_link = generate_affiliate_link(
+                        url, tag
+                    )
+                    self._safe_offers_log(
+                        f"Link de afiliado: {self._current_affiliate_link}"
+                    )
+                else:
+                    self._current_affiliate_link = url
+                    self._safe_offers_log(
+                        "Sem tag de afiliado. Preencha para gerar link."
+                    )
+
+                title = data.get("title", "")[:80]
+                price = data.get("price", "N/A")
+                preview = f"{title} — R$ {price}"
+
+                self.after(
+                    0,
+                    lambda: self.product_preview_label.configure(
+                        text=preview, text_color="white"
+                    ),
+                )
+
+                link_text = self._current_affiliate_link[:80] + "..."
+                self.after(
+                    0,
+                    lambda: self.affiliate_link_label.configure(
+                        text=f"Link: {link_text}"
+                    ),
+                )
+
+                self.after(
+                    0,
+                    lambda: self.post_story_btn.configure(state="normal"),
+                )
+                self.after(
+                    0,
+                    lambda: self.post_feed_btn.configure(state="normal"),
+                )
+                self.after(
+                    0,
+                    lambda: self.copy_whatsapp_btn.configure(state="normal"),
+                )
+                self._safe_offers_log("Dados extraídos! Escolha uma ação.")
+
+                # Navegar de volta ao Instagram
+                self._bot._page.goto(
+                    "https://www.instagram.com/",
+                    wait_until="load",
+                    timeout=15000,
+                )
+
+            except Exception as exc:
+                self._safe_offers_log(f"Erro: {exc}")
+            finally:
+                self.after(
+                    0, lambda: self.extract_btn.configure(state="normal")
+                )
+
+        self._submit_task(_task)
+
+    def _on_post_story(self) -> None:
+        """Posta o produto como story no Instagram via API."""
+        if not self._current_product:
+            self._append_offers_log("Extraia um produto primeiro!")
+            return
+
+        if not self._api:
+            self._append_offers_log(
+                "API não conectada! Configure o token na aba Dashboard."
+            )
+            return
+
+        image_url = self._current_product.get("image_url", "")
+        if not image_url:
+            self._append_offers_log("Sem imagem do produto disponível.")
+            return
+
+        self.post_story_btn.configure(state="disabled")
+        self._safe_offers_log("Publicando story no Instagram...")
+
+        def _post():
+            try:
+                result = self._api.publish_story(image_url)
+                media_id = result.get("id", "")
+                self._safe_offers_log(
+                    f"Story publicado! Media ID: {media_id}"
+                )
+            except Exception as exc:
+                self._safe_offers_log(f"Erro ao postar story: {exc}")
+                self._safe_offers_log(
+                    "Verifique se tem a permissão "
+                    "'instagram_business_content_publish' no seu token."
+                )
+            finally:
+                self.after(
+                    0,
+                    lambda: self.post_story_btn.configure(state="normal"),
+                )
+
+        threading.Thread(target=_post, daemon=True).start()
+
+    def _on_post_feed(self) -> None:
+        """Posta o produto no feed do Instagram via API."""
+        if not self._current_product:
+            self._append_offers_log("Extraia um produto primeiro!")
+            return
+
+        if not self._api:
+            self._append_offers_log(
+                "API não conectada! Configure o token na aba Dashboard."
+            )
+            return
+
+        image_url = self._current_product.get("image_url", "")
+        if not image_url:
+            self._append_offers_log("Sem imagem do produto disponível.")
+            return
+
+        title = self._current_product.get("title", "")
+        price = self._current_product.get("price", "")
+        original_price = self._current_product.get("original_price", "")
+        discount = self._current_product.get("discount", "")
+
+        caption_lines = [title, ""]
+        if original_price and discount:
+            caption_lines.append(f"De R$ {original_price}")
+            caption_lines.append(f"Por R$ {price} ({discount})")
+        elif price:
+            caption_lines.append(f"R$ {price}")
+
+        if self._current_affiliate_link:
+            caption_lines.extend(["", f"Link: {self._current_affiliate_link}"])
+
+        caption_lines.extend(
+            ["", "#ofertas #promocao #mercadolivre #radardaspromos"]
+        )
+        caption = "\n".join(caption_lines)
+
+        self.post_feed_btn.configure(state="disabled")
+        self._safe_offers_log("Publicando no feed do Instagram...")
+
+        def _post():
+            try:
+                result = self._api.publish_feed_post(image_url, caption)
+                media_id = result.get("id", "")
+                self._safe_offers_log(
+                    f"Post publicado no feed! Media ID: {media_id}"
+                )
+            except Exception as exc:
+                self._safe_offers_log(f"Erro ao postar no feed: {exc}")
+                self._safe_offers_log(
+                    "Verifique se tem a permissão "
+                    "'instagram_business_content_publish' no seu token."
+                )
+            finally:
+                self.after(
+                    0,
+                    lambda: self.post_feed_btn.configure(state="normal"),
+                )
+
+        threading.Thread(target=_post, daemon=True).start()
+
+    def _on_copy_whatsapp(self) -> None:
+        """Copia mensagem formatada para WhatsApp."""
+        if not self._current_product:
+            self._append_offers_log("Extraia um produto primeiro!")
+            return
+
+        link = self._current_affiliate_link or self._current_product.get(
+            "url", ""
+        )
+        msg = format_whatsapp_message(self._current_product, link)
+
+        self.clipboard_clear()
+        self.clipboard_append(msg)
+        self._append_offers_log("Mensagem copiada para a área de transferência!")
+        self._append_offers_log("Cole no WhatsApp ou onde preferir.")
 
     # ── Dashboard callbacks ──────────────────────────────────────────────
 
