@@ -411,6 +411,7 @@ class App(ctk.CTk):
             placeholder_text="matt:USERNAME:TOOLID ou TAG-20",
             width=300,
         )
+        self.affiliate_tag_entry.insert(0, "38524122")
         self.affiliate_tag_entry.grid(
             row=1, column=1, padx=12, pady=4, sticky="w"
         )
