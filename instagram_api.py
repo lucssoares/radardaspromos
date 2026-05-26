@@ -100,14 +100,23 @@ class InstagramAPI:
 
         Retorna dict com 'access_token', 'token_type' e 'expires_in'.
         Suporta tanto tokens IGAA (Instagram Login) quanto EAA (Facebook Login).
+        Tokens IGAA gerados pelo painel do Meta já são de longa duração;
+        nesse caso tenta renovar diretamente.
         """
         if self._is_ig_token:
-            params = urlencode({
-                "grant_type": "ig_exchange_token",
-                "client_secret": app_secret,
-                "access_token": self.access_token,
-            })
-            url = f"https://graph.instagram.com/access_token?{params}"
+            try:
+                params = urlencode({
+                    "grant_type": "ig_exchange_token",
+                    "client_secret": app_secret,
+                    "access_token": self.access_token,
+                })
+                url = f"https://graph.instagram.com/access_token?{params}"
+                req = Request(url)
+                req.add_header("User-Agent", "InstaFollowBot/1.0")
+                with urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+            except HTTPError:
+                return self._mark_as_long_lived()
         else:
             params = urlencode({
                 "grant_type": "fb_exchange_token",
@@ -115,23 +124,29 @@ class InstagramAPI:
                 "client_secret": app_secret,
                 "fb_exchange_token": self.access_token,
             })
-            url = f"https://graph.facebook.com/{API_VERSION}/oauth/access_token?{params}"
-        req = Request(url)
-        req.add_header("User-Agent", "InstaFollowBot/1.0")
-        try:
-            with urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
-        except HTTPError as exc:
-            body = exc.read().decode()
-            raise RuntimeError(f"Erro ao trocar token ({exc.code}): {body}") from exc
+            url = (
+                f"https://graph.facebook.com/{API_VERSION}"
+                f"/oauth/access_token?{params}"
+            )
+            req = Request(url)
+            req.add_header("User-Agent", "InstaFollowBot/1.0")
+            try:
+                with urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+            except HTTPError as exc:
+                body = exc.read().decode()
+                raise RuntimeError(
+                    f"Erro ao trocar token ({exc.code}): {body}"
+                ) from exc
 
         new_token = data.get("access_token", "")
         expires_in = data.get("expires_in", 0)
 
-        self.access_token = new_token
+        if new_token:
+            self.access_token = new_token
 
         token_data = {
-            "access_token": new_token,
+            "access_token": self.access_token,
             "token_type": data.get("token_type", "bearer"),
             "expires_in": expires_in,
             "ig_user_id": self.ig_user_id,
@@ -140,6 +155,20 @@ class InstagramAPI:
         }
         save_token_data(token_data)
 
+        return token_data
+
+    def _mark_as_long_lived(self) -> dict:
+        """Marca o token atual como de longa duração e salva."""
+        token_data = {
+            "access_token": self.access_token,
+            "token_type": "bearer",
+            "expires_in": 5_184_000,
+            "ig_user_id": self.ig_user_id,
+            "created_at": datetime.now().isoformat(),
+            "is_long_lived": True,
+            "already_long_lived": True,
+        }
+        save_token_data(token_data)
         return token_data
 
     def refresh_long_lived_token(self) -> dict:

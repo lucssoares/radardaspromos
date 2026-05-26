@@ -1237,13 +1237,25 @@ class App(ctk.CTk):
         def _exchange():
             try:
                 result = self._api.exchange_for_long_lived_token(app_id, app_secret)
+                already = result.get("already_long_lived", False)
                 expires_days = result.get("expires_in", 0) // 86400
-                self._safe_dash_log(
-                    f"Token de longa duração gerado! Válido por {expires_days} dias."
-                )
 
-                # Atualizar campo de token
-                self.after(0, self._update_token_display, result["access_token"])
+                if already:
+                    msg = (
+                        "Seu token já é de longa duração (60 dias)! "
+                        "Salvo localmente. Use 'Renovar' quando "
+                        "estiver perto de expirar."
+                    )
+                else:
+                    msg = (
+                        f"Token de longa duração gerado! "
+                        f"Válido por {expires_days} dias."
+                    )
+                    self.after(
+                        0, self._update_token_display, result["access_token"]
+                    )
+
+                self._safe_dash_log(msg)
                 self.after(0, lambda: self.token_status_label.configure(
                     text=f"Token de longa duração ({expires_days} dias)",
                     text_color="#4CAF50",
