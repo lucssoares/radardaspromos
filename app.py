@@ -17,7 +17,7 @@ from bot import (
     launch_chrome_with_debug,
     load_follow_log,
 )
-from instagram_api import InstagramAPI, load_token_data
+from instagram_api import InstagramAPI, load_token_data, save_token_data
 from mercadolivre import (
     extract_product_data,
     format_whatsapp_message,
@@ -277,6 +277,9 @@ class App(ctk.CTk):
             row=0, column=1, padx=12, pady=(12, 4), sticky="w"
         )
 
+        # Tentar preencher @ automaticamente do token salvo
+        self._try_autofill_username()
+
         ctk.CTkLabel(
             config_frame,
             text="Dias mínimos:",
@@ -353,6 +356,21 @@ class App(ctk.CTk):
             tab, width=660, height=200, state="disabled"
         )
         self.unfollow_log_box.pack(padx=10, pady=(8, 10))
+
+    def _try_autofill_username(self) -> None:
+        """Tenta preencher o campo de username automaticamente."""
+        saved = load_token_data()
+        if saved and saved.get("username"):
+            self.my_username_entry.insert(0, saved["username"])
+
+    def _set_username_entry(self, username: str) -> None:
+        """Preenche o campo de username e salva no token."""
+        if not self.my_username_entry.get().strip():
+            self.my_username_entry.insert(0, username)
+        saved = load_token_data()
+        if saved:
+            saved["username"] = username
+            save_token_data(saved)
 
     def _update_follow_count(self) -> None:
         """Atualiza o contador de follows registrados."""
@@ -1203,6 +1221,11 @@ class App(ctk.CTk):
 
                 metrics = self._api.record_metrics()
                 self._display_metrics(metrics)
+
+                # Preencher @ automaticamente na aba Limpar Desumildes
+                username = metrics.get("username", "")
+                if username:
+                    self.after(0, self._set_username_entry, username)
 
                 self.after(0, lambda: self.refresh_btn.configure(state="normal"))
                 self.after(0, lambda: self.history_btn.configure(state="normal"))
