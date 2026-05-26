@@ -15,7 +15,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 API_VERSION = "v25.0"
-BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
+BASE_URL_FB = f"https://graph.facebook.com/{API_VERSION}"
+BASE_URL_IG = f"https://graph.instagram.com/{API_VERSION}"
 
 # Diretório persistente para dados do bot (home do usuário)
 # Usa a pasta do usuário para que os dados persistam mesmo ao rodar como .exe
@@ -54,6 +55,14 @@ class InstagramAPI:
     def __init__(self, access_token: str, ig_user_id: str = ""):
         self.access_token = access_token
         self.ig_user_id = ig_user_id
+        self._is_ig_token = access_token.startswith("IGAA")
+
+    @property
+    def base_url(self) -> str:
+        """Retorna a URL base correta dependendo do tipo de token."""
+        if self._is_ig_token:
+            return BASE_URL_IG
+        return BASE_URL_FB
 
     def _request(self, url: str) -> dict:
         """Faz uma requisição GET à API."""
@@ -90,14 +99,23 @@ class InstagramAPI:
         """Troca um token de curta duração por um de longa duração (~60 dias).
 
         Retorna dict com 'access_token', 'token_type' e 'expires_in'.
+        Suporta tanto tokens IGAA (Instagram Login) quanto EAA (Facebook Login).
         """
-        params = urlencode({
-            "grant_type": "fb_exchange_token",
-            "client_id": app_id,
-            "client_secret": app_secret,
-            "fb_exchange_token": self.access_token,
-        })
-        url = f"https://graph.facebook.com/{API_VERSION}/oauth/access_token?{params}"
+        if self._is_ig_token:
+            params = urlencode({
+                "grant_type": "ig_exchange_token",
+                "client_secret": app_secret,
+                "access_token": self.access_token,
+            })
+            url = f"https://graph.instagram.com/access_token?{params}"
+        else:
+            params = urlencode({
+                "grant_type": "fb_exchange_token",
+                "client_id": app_id,
+                "client_secret": app_secret,
+                "fb_exchange_token": self.access_token,
+            })
+            url = f"https://graph.facebook.com/{API_VERSION}/oauth/access_token?{params}"
         req = Request(url)
         req.add_header("User-Agent", "InstaFollowBot/1.0")
         try:
@@ -175,11 +193,23 @@ class InstagramAPI:
 
     def discover_user_id(self) -> str:
         """Descobre o IG User ID a partir do access token."""
-        data = self._request(f"{BASE_URL}/me?fields=id,name")
+        if self._is_ig_token:
+            data = self._request(
+                f"{self.base_url}/me?fields=user_id,username,name"
+            )
+            self.ig_user_id = data.get("user_id", data.get("id", ""))
+            if self.ig_user_id:
+                return self.ig_user_id
+            raise RuntimeError(
+                "Não foi possível obter o IG User ID com o token IGAA."
+            )
+
+        data = self._request(f"{self.base_url}/me?fields=id,name")
         fb_user_id = data.get("id", "")
 
         pages = self._request(
-            f"{BASE_URL}/{fb_user_id}/accounts?fields=id,name,instagram_business_account"
+            f"{self.base_url}/{fb_user_id}/accounts"
+            f"?fields=id,name,instagram_business_account"
         )
 
         for page in pages.get("data", []):
@@ -203,7 +233,7 @@ class InstagramAPI:
 
         fields = "username,name,biography,followers_count,follows_count,media_count,profile_picture_url"
         data = self._request(
-            f"{BASE_URL}/{self.ig_user_id}?fields={fields}"
+            f"{self.base_url}/{self.ig_user_id}?fields={fields}"
         )
         return {
             "username": data.get("username", ""),
@@ -228,7 +258,7 @@ class InstagramAPI:
             "{username,name,biography,followers_count,follows_count,media_count}"
         )
         data = self._request(
-            f"{BASE_URL}/{self.ig_user_id}?fields={fields}"
+            f"{self.base_url}/{self.ig_user_id}?fields={fields}"
         )
         bd = data.get("business_discovery", {})
         return {
@@ -254,7 +284,7 @@ class InstagramAPI:
             self.discover_user_id()
 
         # Passo 1: Criar container do story
-        container_url = f"{BASE_URL}/{self.ig_user_id}/media"
+        container_url = f"{self.base_url}/{self.ig_user_id}/media"
         container_data = {
             "image_url": image_url,
             "media_type": "STORIES",
@@ -270,7 +300,7 @@ class InstagramAPI:
 
         # Passo 2: Aguardar processamento (polling)
         status_url = (
-            f"{BASE_URL}/{container_id}"
+            f"{self.base_url}/{container_id}"
             f"?fields=status_code"
         )
         for _ in range(30):
@@ -287,7 +317,7 @@ class InstagramAPI:
             raise RuntimeError("Timeout no processamento do story")
 
         # Passo 3: Publicar o container
-        publish_url = f"{BASE_URL}/{self.ig_user_id}/media_publish"
+        publish_url = f"{self.base_url}/{self.ig_user_id}/media_publish"
         publish_data = {"creation_id": container_id}
 
         result = self._post_request(publish_url, publish_data)
@@ -311,7 +341,7 @@ class InstagramAPI:
             self.discover_user_id()
 
         # Passo 1: Criar container do post
-        container_url = f"{BASE_URL}/{self.ig_user_id}/media"
+        container_url = f"{self.base_url}/{self.ig_user_id}/media"
         container_data = {"image_url": image_url}
         if caption:
             container_data["caption"] = caption
@@ -326,7 +356,7 @@ class InstagramAPI:
 
         # Passo 2: Aguardar processamento
         status_url = (
-            f"{BASE_URL}/{container_id}"
+            f"{self.base_url}/{container_id}"
             f"?fields=status_code"
         )
         for _ in range(30):
@@ -343,7 +373,7 @@ class InstagramAPI:
             raise RuntimeError("Timeout no processamento do post")
 
         # Passo 3: Publicar
-        publish_url = f"{BASE_URL}/{self.ig_user_id}/media_publish"
+        publish_url = f"{self.base_url}/{self.ig_user_id}/media_publish"
         publish_data = {"creation_id": container_id}
 
         result = self._post_request(publish_url, publish_data)
