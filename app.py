@@ -8,6 +8,7 @@ Inclui dashboard de métricas via Instagram Graph API.
 
 import queue
 import threading
+import time as _time
 
 import customtkinter as ctk
 
@@ -20,8 +21,11 @@ from bot import (
 from instagram_api import InstagramAPI, load_token_data, save_token_data
 from mercadolivre import (
     extract_product_data,
+    format_instagram_caption,
     format_whatsapp_message,
     generate_affiliate_link,
+    scrape_offers,
+    scrape_offers_by_keyword,
 )
 
 ctk.set_appearance_mode("dark")
@@ -394,138 +398,182 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(
             tab,
-            text="Extraia ofertas do Mercado Livre e poste no Instagram",
+            text="Busque promoções do ML e poste automaticamente no Instagram",
             font=ctk.CTkFont(size=12),
             text_color="gray",
-        ).pack(pady=(0, 8))
+        ).pack(pady=(0, 6))
 
-        # ── Configuração ──────────────────────────────────────────────────
-        config_frame = ctk.CTkFrame(tab)
-        config_frame.pack(padx=10, pady=(0, 6), fill="x")
-
-        ctk.CTkLabel(
-            config_frame,
-            text="URL do produto (ML):",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
-
-        self.ml_url_entry = ctk.CTkEntry(
-            config_frame,
-            placeholder_text="Cole a URL do produto do Mercado Livre",
-            width=450,
-        )
-        self.ml_url_entry.grid(
-            row=0, column=1, padx=12, pady=(12, 4), sticky="w"
-        )
+        # ── Tag de afiliado ────────────────────────────────────────────────
+        tag_frame = ctk.CTkFrame(tab)
+        tag_frame.pack(padx=10, pady=(0, 4), fill="x")
 
         ctk.CTkLabel(
-            config_frame,
+            tag_frame,
             text="Tag de afiliado:",
             font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=1, column=0, padx=12, pady=4, sticky="w")
+        ).grid(row=0, column=0, padx=12, pady=8, sticky="w")
 
         self.affiliate_tag_entry = ctk.CTkEntry(
-            config_frame,
-            placeholder_text="matt:USERNAME:TOOLID ou TAG-20",
-            width=300,
+            tag_frame,
+            placeholder_text="matt_tool ID",
+            width=200,
         )
         self.affiliate_tag_entry.insert(0, "38524122")
-        self.affiliate_tag_entry.grid(
-            row=1, column=1, padx=12, pady=4, sticky="w"
+        self.affiliate_tag_entry.grid(row=0, column=1, padx=8, pady=8, sticky="w")
+
+        # ── Busca de ofertas ───────────────────────────────────────────────
+        search_frame = ctk.CTkFrame(tab)
+        search_frame.pack(padx=10, pady=(0, 4), fill="x")
+
+        ctk.CTkLabel(
+            search_frame,
+            text="Buscar ofertas:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, padx=12, pady=(8, 4), sticky="w")
+
+        self.ml_keyword_entry = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="Palavra-chave (ex: celular, notebook) ou vazio = ofertas do dia",
+            width=420,
+        )
+        self.ml_keyword_entry.grid(
+            row=0, column=1, padx=8, pady=(8, 4), sticky="w"
         )
 
         ctk.CTkLabel(
-            config_frame,
-            text="Encontre sua tag gerando um link no Portal do Afiliado",
-            font=ctk.CTkFont(size=10),
-            text_color="#2196F3",
-        ).grid(
-            row=2, column=0, columnspan=2, padx=12, pady=(0, 10), sticky="w"
+            search_frame,
+            text="Qtd máxima:",
+            font=ctk.CTkFont(size=12),
+        ).grid(row=1, column=0, padx=12, pady=(0, 8), sticky="w")
+
+        self.ml_max_items_entry = ctk.CTkEntry(
+            search_frame, width=60,
         )
+        self.ml_max_items_entry.insert(0, "10")
+        self.ml_max_items_entry.grid(
+            row=1, column=1, padx=8, pady=(0, 8), sticky="w"
+        )
+
+        # ── URL manual (mantém compatibilidade) ───────────────────────────
+        manual_frame = ctk.CTkFrame(tab)
+        manual_frame.pack(padx=10, pady=(0, 4), fill="x")
+
+        ctk.CTkLabel(
+            manual_frame,
+            text="Ou URL manual:",
+            font=ctk.CTkFont(size=12),
+        ).grid(row=0, column=0, padx=12, pady=6, sticky="w")
+
+        self.ml_url_entry = ctk.CTkEntry(
+            manual_frame,
+            placeholder_text="Cole a URL de um produto específico do ML",
+            width=440,
+        )
+        self.ml_url_entry.grid(row=0, column=1, padx=8, pady=6, sticky="w")
 
         # ── Botões ────────────────────────────────────────────────────────
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        btn_frame.pack(padx=10, pady=(0, 4), fill="x")
+        btn_frame.pack(padx=10, pady=(2, 2), fill="x")
+
+        self.search_offers_btn = ctk.CTkButton(
+            btn_frame,
+            text="Buscar Ofertas",
+            command=self._on_search_offers,
+            width=140,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#2196F3",
+            hover_color="#1976D2",
+        )
+        self.search_offers_btn.pack(side="left", padx=(0, 6))
 
         self.extract_btn = ctk.CTkButton(
             btn_frame,
-            text="1. Extrair Dados",
+            text="Extrair URL",
             command=self._on_extract_product,
-            width=150,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            width=110,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#FF9800",
             hover_color="#F57C00",
         )
-        self.extract_btn.pack(side="left", padx=(0, 8))
+        self.extract_btn.pack(side="left", padx=(0, 6))
 
-        self.post_story_btn = ctk.CTkButton(
+        self.post_selected_btn = ctk.CTkButton(
             btn_frame,
-            text="2. Postar Story",
-            command=self._on_post_story,
+            text="Postar Selecionado",
+            command=self._on_post_selected,
             width=150,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
             state="disabled",
             fg_color="#E91E63",
             hover_color="#C2185B",
         )
-        self.post_story_btn.pack(side="left", padx=(0, 8))
+        self.post_selected_btn.pack(side="left", padx=(0, 6))
 
-        self.post_feed_btn = ctk.CTkButton(
+        self.auto_post_btn = ctk.CTkButton(
             btn_frame,
-            text="Postar no Feed",
-            command=self._on_post_feed,
+            text="Auto-Postar Tudo",
+            command=self._on_auto_post_all,
             width=140,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
             state="disabled",
             fg_color="#4CAF50",
             hover_color="#388E3C",
         )
-        self.post_feed_btn.pack(side="left", padx=(0, 8))
+        self.auto_post_btn.pack(side="left", padx=(0, 6))
 
         self.copy_whatsapp_btn = ctk.CTkButton(
             btn_frame,
-            text="Copiar p/ WhatsApp",
+            text="WhatsApp",
             command=self._on_copy_whatsapp,
-            width=160,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            width=90,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
             state="disabled",
             fg_color="#25D366",
             hover_color="#128C7E",
         )
         self.copy_whatsapp_btn.pack(side="left")
 
-        # ── Preview do produto ───────────────────────────────────────────
-        self.product_preview_label = ctk.CTkLabel(
-            tab,
-            text="Cole a URL de um produto e clique 'Extrair Dados'",
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
-        )
-        self.product_preview_label.pack(pady=(4, 2))
+        # ── Tipo de postagem ─────────────────────────────────────────────
+        post_type_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        post_type_frame.pack(padx=10, pady=(0, 2), fill="x")
 
-        # ── Link de afiliado gerado ──────────────────────────────────────
-        self.affiliate_link_label = ctk.CTkLabel(
-            tab,
-            text="",
-            font=ctk.CTkFont(size=11),
-            text_color="#4CAF50",
-            wraplength=650,
+        ctk.CTkLabel(
+            post_type_frame, text="Postar como:",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+
+        self.post_type_var = ctk.StringVar(value="feed")
+        ctk.CTkRadioButton(
+            post_type_frame, text="Feed",
+            variable=self.post_type_var, value="feed",
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkRadioButton(
+            post_type_frame, text="Story",
+            variable=self.post_type_var, value="story",
+        ).pack(side="left")
+
+        # ── Lista de ofertas encontradas ──────────────────────────────────
+        self.offers_listbox = ctk.CTkTextbox(
+            tab, width=660, height=120, state="disabled",
         )
-        self.affiliate_link_label.pack(pady=(0, 2))
+        self.offers_listbox.pack(padx=10, pady=(2, 2))
 
         # ── Log ──────────────────────────────────────────────────────────
         self.offers_log_box = ctk.CTkTextbox(
-            tab, width=660, height=160, state="disabled"
+            tab, width=660, height=100, state="disabled"
         )
-        self.offers_log_box.pack(padx=10, pady=(4, 10))
+        self.offers_log_box.pack(padx=10, pady=(2, 6))
 
-        # Dados do produto extraído (armazenados temporariamente)
+        # Dados internos
         self._current_product: dict | None = None
         self._current_affiliate_link: str = ""
+        self._offers_list: list[dict] = []
+        self._selected_offer_idx: int = -1
 
     def _build_dashboard_tab(self) -> None:
         """Constrói a aba do dashboard de métricas."""
@@ -974,17 +1022,107 @@ class App(ctk.CTk):
     def _safe_offers_log(self, msg: str) -> None:
         self.after(0, self._append_offers_log, msg)
 
+    def _display_offers_list(self) -> None:
+        """Exibe a lista de ofertas encontradas na listbox."""
+        self.offers_listbox.configure(state="normal")
+        self.offers_listbox.delete("1.0", "end")
+        for i, item in enumerate(self._offers_list):
+            title = item.get("title", "")[:60]
+            price = item.get("price", "N/A")
+            discount = item.get("discount", "")
+            disc_text = f" ({discount})" if discount else ""
+            line = f"[{i + 1}] {title} — R$ {price}{disc_text}\n"
+            self.offers_listbox.insert("end", line)
+        self.offers_listbox.configure(state="disabled")
+
+    def _on_search_offers(self) -> None:
+        """Busca ofertas do ML via Playwright."""
+        if not self._bot or not self._bot._page:
+            self._append_offers_log(
+                "Bot não conectado! Use 'Conectar Bot' na aba Bot de Follow."
+            )
+            return
+
+        keyword = self.ml_keyword_entry.get().strip()
+        try:
+            max_items = int(self.ml_max_items_entry.get().strip() or "10")
+        except ValueError:
+            max_items = 10
+
+        self.search_offers_btn.configure(state="disabled")
+
+        def _task():
+            try:
+                if keyword:
+                    items = scrape_offers_by_keyword(
+                        self._bot._page, keyword,
+                        max_items=max_items,
+                        on_log=self._safe_offers_log,
+                    )
+                else:
+                    items = scrape_offers(
+                        self._bot._page,
+                        max_items=max_items,
+                        on_log=self._safe_offers_log,
+                    )
+
+                self._offers_list = items
+                self._selected_offer_idx = 0 if items else -1
+
+                if items:
+                    self._current_product = items[0]
+                    tag = self.affiliate_tag_entry.get().strip()
+                    if tag:
+                        self._current_affiliate_link = generate_affiliate_link(
+                            items[0]["url"], tag
+                        )
+                    self.after(0, self._display_offers_list)
+                    self.after(
+                        0,
+                        lambda: self.post_selected_btn.configure(
+                            state="normal"
+                        ),
+                    )
+                    self.after(
+                        0,
+                        lambda: self.auto_post_btn.configure(state="normal"),
+                    )
+                    self.after(
+                        0,
+                        lambda: self.copy_whatsapp_btn.configure(
+                            state="normal"
+                        ),
+                    )
+                    self._safe_offers_log(
+                        f"Selecione um produto (1-{len(items)}) ou "
+                        f"use 'Auto-Postar Tudo'."
+                    )
+                else:
+                    self._safe_offers_log("Nenhuma oferta encontrada.")
+
+                self._bot._page.goto(
+                    "https://www.instagram.com/",
+                    wait_until="load", timeout=15000,
+                )
+            except Exception as exc:
+                self._safe_offers_log(f"Erro: {exc}")
+            finally:
+                self.after(
+                    0,
+                    lambda: self.search_offers_btn.configure(state="normal"),
+                )
+
+        self._submit_task(_task)
+
     def _on_extract_product(self) -> None:
-        """Extrai dados do produto do Mercado Livre via Playwright."""
+        """Extrai dados de um produto específico via URL manual."""
         url = self.ml_url_entry.get().strip()
         if not url:
             self._append_offers_log("Cole a URL do produto do Mercado Livre!")
             return
 
         if "mercadolivre.com.br" not in url and "mercadolibre.com" not in url:
-            self._append_offers_log(
-                "URL inválida. Use uma URL do Mercado Livre."
-            )
+            self._append_offers_log("URL inválida. Use uma URL do ML.")
             return
 
         if not self._bot or not self._bot._page:
@@ -1001,15 +1139,13 @@ class App(ctk.CTk):
                 data = extract_product_data(
                     self._bot._page, url, on_log=self._safe_offers_log
                 )
-
                 if not data:
                     self._safe_offers_log("Falha ao extrair dados.")
-                    self.after(
-                        0, lambda: self.extract_btn.configure(state="normal")
-                    )
                     return
 
                 self._current_product = data
+                self._offers_list = [data]
+                self._selected_offer_idx = 0
 
                 tag = self.affiliate_tag_entry.get().strip()
                 if tag:
@@ -1017,54 +1153,24 @@ class App(ctk.CTk):
                         url, tag
                     )
                     self._safe_offers_log(
-                        f"Link de afiliado: {self._current_affiliate_link}"
-                    )
-                else:
-                    self._current_affiliate_link = url
-                    self._safe_offers_log(
-                        "Sem tag de afiliado. Preencha para gerar link."
+                        f"Link: {self._current_affiliate_link}"
                     )
 
-                title = data.get("title", "")[:80]
-                price = data.get("price", "N/A")
-                preview = f"{title} — R$ {price}"
-
+                self.after(0, self._display_offers_list)
                 self.after(
                     0,
-                    lambda: self.product_preview_label.configure(
-                        text=preview, text_color="white"
-                    ),
-                )
-
-                link_text = self._current_affiliate_link[:80] + "..."
-                self.after(
-                    0,
-                    lambda: self.affiliate_link_label.configure(
-                        text=f"Link: {link_text}"
-                    ),
-                )
-
-                self.after(
-                    0,
-                    lambda: self.post_story_btn.configure(state="normal"),
-                )
-                self.after(
-                    0,
-                    lambda: self.post_feed_btn.configure(state="normal"),
+                    lambda: self.post_selected_btn.configure(state="normal"),
                 )
                 self.after(
                     0,
                     lambda: self.copy_whatsapp_btn.configure(state="normal"),
                 )
-                self._safe_offers_log("Dados extraídos! Escolha uma ação.")
+                self._safe_offers_log("Dados extraídos!")
 
-                # Navegar de volta ao Instagram
                 self._bot._page.goto(
                     "https://www.instagram.com/",
-                    wait_until="load",
-                    timeout=15000,
+                    wait_until="load", timeout=15000,
                 )
-
             except Exception as exc:
                 self._safe_offers_log(f"Erro: {exc}")
             finally:
@@ -1074,51 +1180,75 @@ class App(ctk.CTk):
 
         self._submit_task(_task)
 
-    def _on_post_story(self) -> None:
-        """Posta o produto como story no Instagram via API."""
-        if not self._current_product:
-            self._append_offers_log("Extraia um produto primeiro!")
-            return
-
+    def _post_product_to_instagram(self, product: dict) -> bool:
+        """Posta um produto no Instagram. Retorna True se OK."""
         if not self._api:
-            self._append_offers_log(
+            self._safe_offers_log(
                 "API não conectada! Configure o token na aba Dashboard."
             )
-            return
+            return False
 
-        image_url = self._current_product.get("image_url", "")
+        image_url = product.get("image_url", "")
         if not image_url:
-            self._append_offers_log("Sem imagem do produto disponível.")
-            return
+            self._safe_offers_log(
+                f"Sem imagem: {product.get('title', '')[:40]}"
+            )
+            return False
 
-        self.post_story_btn.configure(state="disabled")
-        self._safe_offers_log("Publicando story no Instagram...")
+        tag = self.affiliate_tag_entry.get().strip()
+        affiliate_link = generate_affiliate_link(
+            product["url"], tag
+        ) if tag else product["url"]
 
-        def _post():
-            try:
+        post_type = self.post_type_var.get()
+        title = product.get("title", "")[:50]
+
+        try:
+            if post_type == "story":
+                self._safe_offers_log(f"Postando story: {title}...")
                 result = self._api.publish_story(image_url)
-                media_id = result.get("id", "")
-                self._safe_offers_log(
-                    f"Story publicado! Media ID: {media_id}"
-                )
-            except Exception as exc:
-                self._safe_offers_log(f"Erro ao postar story: {exc}")
-                self._safe_offers_log(
-                    "Verifique se tem a permissão "
-                    "'instagram_business_content_publish' no seu token."
-                )
+            else:
+                caption = format_instagram_caption(product, affiliate_link)
+                self._safe_offers_log(f"Postando no feed: {title}...")
+                result = self._api.publish_feed_post(image_url, caption)
+
+            media_id = result.get("id", "")
+            self._safe_offers_log(
+                f"Publicado! ID: {media_id}"
+            )
+            return True
+        except Exception as exc:
+            self._safe_offers_log(f"Erro ao postar: {exc}")
+            return False
+
+    def _on_post_selected(self) -> None:
+        """Posta o produto selecionado no Instagram."""
+        if not self._offers_list:
+            self._append_offers_log("Busque ofertas primeiro!")
+            return
+
+        idx = self._selected_offer_idx
+        if idx < 0 or idx >= len(self._offers_list):
+            idx = 0
+
+        product = self._offers_list[idx]
+        self.post_selected_btn.configure(state="disabled")
+
+        def _post():
+            try:
+                self._post_product_to_instagram(product)
             finally:
                 self.after(
                     0,
-                    lambda: self.post_story_btn.configure(state="normal"),
+                    lambda: self.post_selected_btn.configure(state="normal"),
                 )
 
         threading.Thread(target=_post, daemon=True).start()
 
-    def _on_post_feed(self) -> None:
-        """Posta o produto no feed do Instagram via API."""
-        if not self._current_product:
-            self._append_offers_log("Extraia um produto primeiro!")
+    def _on_auto_post_all(self) -> None:
+        """Posta todas as ofertas encontradas no Instagram automaticamente."""
+        if not self._offers_list:
+            self._append_offers_log("Busque ofertas primeiro!")
             return
 
         if not self._api:
@@ -1127,70 +1257,62 @@ class App(ctk.CTk):
             )
             return
 
-        image_url = self._current_product.get("image_url", "")
-        if not image_url:
-            self._append_offers_log("Sem imagem do produto disponível.")
-            return
+        self.auto_post_btn.configure(state="disabled")
+        self.search_offers_btn.configure(state="disabled")
 
-        title = self._current_product.get("title", "")
-        price = self._current_product.get("price", "")
-        original_price = self._current_product.get("original_price", "")
-        discount = self._current_product.get("discount", "")
-
-        caption_lines = [title, ""]
-        if original_price and discount:
-            caption_lines.append(f"De R$ {original_price}")
-            caption_lines.append(f"Por R$ {price} ({discount})")
-        elif price:
-            caption_lines.append(f"R$ {price}")
-
-        if self._current_affiliate_link:
-            caption_lines.extend(["", f"Link: {self._current_affiliate_link}"])
-
-        caption_lines.extend(
-            ["", "#ofertas #promocao #mercadolivre #radardaspromos"]
-        )
-        caption = "\n".join(caption_lines)
-
-        self.post_feed_btn.configure(state="disabled")
-        self._safe_offers_log("Publicando no feed do Instagram...")
-
-        def _post():
+        def _post_all():
+            total = len(self._offers_list)
+            ok = 0
+            errs = 0
             try:
-                result = self._api.publish_feed_post(image_url, caption)
-                media_id = result.get("id", "")
+                for i, product in enumerate(self._offers_list):
+                    self._safe_offers_log(
+                        f"--- Postando {i + 1}/{total} ---"
+                    )
+                    success = self._post_product_to_instagram(product)
+                    if success:
+                        ok += 1
+                    else:
+                        errs += 1
+                    # Intervalo entre postagens (evitar rate limit)
+                    if i < total - 1:
+                        self._safe_offers_log("Aguardando 30s...")
+                        _time.sleep(30)
+
                 self._safe_offers_log(
-                    f"Post publicado no feed! Media ID: {media_id}"
+                    f"Concluído! {ok} postados, {errs} erros."
                 )
             except Exception as exc:
-                self._safe_offers_log(f"Erro ao postar no feed: {exc}")
-                self._safe_offers_log(
-                    "Verifique se tem a permissão "
-                    "'instagram_business_content_publish' no seu token."
-                )
+                self._safe_offers_log(f"Erro geral: {exc}")
             finally:
                 self.after(
                     0,
-                    lambda: self.post_feed_btn.configure(state="normal"),
+                    lambda: self.auto_post_btn.configure(state="normal"),
+                )
+                self.after(
+                    0,
+                    lambda: self.search_offers_btn.configure(state="normal"),
                 )
 
-        threading.Thread(target=_post, daemon=True).start()
+        threading.Thread(target=_post_all, daemon=True).start()
 
     def _on_copy_whatsapp(self) -> None:
         """Copia mensagem formatada para WhatsApp."""
         if not self._current_product:
-            self._append_offers_log("Extraia um produto primeiro!")
+            self._append_offers_log("Busque ou extraia um produto primeiro!")
             return
 
-        link = self._current_affiliate_link or self._current_product.get(
-            "url", ""
+        tag = self.affiliate_tag_entry.get().strip()
+        link = (
+            generate_affiliate_link(self._current_product["url"], tag)
+            if tag
+            else self._current_product.get("url", "")
         )
         msg = format_whatsapp_message(self._current_product, link)
 
         self.clipboard_clear()
         self.clipboard_append(msg)
         self._append_offers_log("Mensagem copiada para a área de transferência!")
-        self._append_offers_log("Cole no WhatsApp ou onde preferir.")
 
     # ── Dashboard callbacks ──────────────────────────────────────────────
 
