@@ -60,6 +60,9 @@ BOT_PROFILE_DIR = os.path.join(_APP_DATA_DIR, "chrome_bot_profile")
 # Registro de follows com data (para regra de unfollow após 3 dias)
 FOLLOW_LOG_FILE = os.path.join(_APP_DATA_DIR, "follow_log.json")
 
+# Lista de seguidores coletada (cache para reutilizar)
+FOLLOWERS_LIST_FILE = os.path.join(_APP_DATA_DIR, "followers_list.json")
+
 
 def load_follow_log() -> dict:
     """Carrega o registro de follows. Retorna {username: iso_date_str}."""
@@ -86,7 +89,20 @@ def remove_from_follow_log(username: str) -> None:
     """Remove um usuário do registro de follows."""
     log = load_follow_log()
     log.pop(username, None)
-    save_follow_log(log)
+
+
+def load_followers_list() -> list[str]:
+    """Carrega a lista de seguidores salva."""
+    if os.path.isfile(FOLLOWERS_LIST_FILE):
+        with open(FOLLOWERS_LIST_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def save_followers_list(followers: list[str]) -> None:
+    """Salva a lista de seguidores."""
+    with open(FOLLOWERS_LIST_FILE, "w", encoding="utf-8") as f:
+        json.dump(followers, f, ensure_ascii=False, indent=2)
 
 
 def _wait_for_cdp_port(port: int, timeout: int = 30, on_log=None) -> bool:
@@ -1050,28 +1066,9 @@ class InstagramBot:
             self._log(f"  Erro com @{username}: {exc}")
             return False
 
-    def hide_story_from_all_except(
-        self,
-        allowed_username: str,
-        my_username: str = "",
-    ) -> dict:
-        """Oculta stories de todos os seguidores exceto o perfil permitido.
-
-        Para cada seguidor, visita o perfil, clica nos '...' e seleciona
-        'Ocultar seu story'. Pula o perfil permitido.
-        """
-        stats = {"hidden": 0, "skipped": 0, "already": 0, "errors": 0}
-        allowed = allowed_username.lower().strip().lstrip("@")
-
-        self._log(f"Ocultando stories de todos exceto @{allowed}...")
-        self._stop_requested = False
-
-        if not my_username:
-            self._log("Username não fornecido. Informe seu @.")
-            return stats
-
+    def _collect_followers(self, my_username: str) -> list[str]:
+        """Coleta todos os seguidores e salva em cache."""
         my_user = my_username.lower().strip().lstrip("@")
-        self._log("Coletando lista de seguidores...")
 
         self._page.goto(
             f"https://www.instagram.com/{my_user}/",
@@ -1080,7 +1077,6 @@ class InstagramBot:
         )
         self._delay(2, 3)
 
-        # Abrir lista de seguidores
         followers_link = self._page.locator(
             f'a[href="/{my_user}/followers/"]'
         )
@@ -1090,13 +1086,12 @@ class InstagramBot:
             )
         if followers_link.count() == 0:
             self._log("Não encontrei o link de seguidores.")
-            return stats
+            return []
 
         followers_link.first.click()
         self._delay(2, 3)
         self._log("Lista de seguidores aberta! Coletando...")
 
-        # Coletar todos os seguidores
         all_followers: set[str] = set()
         stale_rounds = 0
 
@@ -1115,12 +1110,61 @@ class InstagramBot:
             self._delay(1, 2)
 
         all_followers.discard(my_user)
-        all_followers.discard(allowed)
         self._page.keyboard.press("Escape")
         self._delay(1, 2)
 
+        result = list(all_followers)
+        save_followers_list(result)
         self._log(
-            f"Total: {len(all_followers)} seguidores para ocultar "
+            f"Total: {len(result)} seguidores coletados e salvos em cache."
+        )
+        return result
+
+    def hide_story_from_all_except(
+        self,
+        allowed_username: str,
+        my_username: str = "",
+        force_collect: bool = False,
+    ) -> dict:
+        """Oculta stories de todos os seguidores exceto o perfil permitido.
+
+        Usa lista de seguidores em cache se disponível. Se não houver,
+        coleta do Instagram e salva para próximas execuções.
+        """
+        stats = {"hidden": 0, "skipped": 0, "already": 0, "errors": 0}
+        allowed = allowed_username.lower().strip().lstrip("@")
+
+        self._log(f"Ocultando stories de todos exceto @{allowed}...")
+        self._stop_requested = False
+
+        if not my_username:
+            self._log("Username não fornecido. Informe seu @.")
+            return stats
+
+        my_user = my_username.lower().strip().lstrip("@")
+
+        # Usar cache ou coletar novamente
+        cached = load_followers_list()
+        if cached and not force_collect:
+            all_followers = [
+                u for u in cached
+                if u.lower() != my_user and u.lower() != allowed
+            ]
+            self._log(
+                f"Usando lista salva ({len(cached)} seguidores no cache)."
+            )
+        else:
+            self._log("Coletando lista de seguidores do Instagram...")
+            collected = self._collect_followers(my_user)
+            if not collected:
+                return stats
+            all_followers = [
+                u for u in collected
+                if u.lower() != my_user and u.lower() != allowed
+            ]
+
+        self._log(
+            f"{len(all_followers)} seguidores para ocultar "
             f"(mantendo @{allowed})."
         )
 
@@ -1128,7 +1172,6 @@ class InstagramBot:
             self._log("Nenhum seguidor para ocultar.")
             return stats
 
-        # Visitar cada perfil e ocultar story
         self._log("Visitando cada perfil para ocultar stories...")
         total = len(all_followers)
 
@@ -1136,10 +1179,6 @@ class InstagramBot:
             if self._stop_requested:
                 self._log("Parado pelo usuário.")
                 break
-
-            if username.lower() == allowed:
-                stats["skipped"] += 1
-                continue
 
             self._log(f"[{i + 1}/{total}] Ocultando @{username}...")
 
@@ -1158,8 +1197,13 @@ class InstagramBot:
         self._log("=" * 50)
         return stats
 
-    def unhide_story_from_all(self, my_username: str = "") -> dict:
-        """Remove a ocultação visitando cada perfil e clicando em desocultar."""
+    def unhide_story_from_all(
+        self, my_username: str = "", force_collect: bool = False,
+    ) -> dict:
+        """Remove a ocultação visitando cada perfil e clicando em desocultar.
+
+        Usa lista de seguidores em cache se disponível.
+        """
         stats = {"unhidden": 0, "skipped": 0, "errors": 0}
 
         self._log("Removendo ocultação de stories de todos...")
@@ -1170,53 +1214,21 @@ class InstagramBot:
             return stats
 
         my_user = my_username.lower().strip().lstrip("@")
-        self._log("Coletando lista de seguidores...")
 
-        self._page.goto(
-            f"https://www.instagram.com/{my_user}/",
-            wait_until="load",
-            timeout=30000,
-        )
-        self._delay(2, 3)
-
-        # Abrir lista de seguidores
-        followers_link = self._page.locator(
-            f'a[href="/{my_user}/followers/"]'
-        )
-        if followers_link.count() == 0:
-            followers_link = self._page.locator(
-                "a:has-text('seguidor'), a:has-text('follower')"
+        cached = load_followers_list()
+        if cached and not force_collect:
+            all_followers = [u for u in cached if u.lower() != my_user]
+            self._log(
+                f"Usando lista salva ({len(cached)} seguidores no cache)."
             )
-        if followers_link.count() == 0:
-            self._log("Não encontrei o link de seguidores.")
-            return stats
+        else:
+            self._log("Coletando lista de seguidores do Instagram...")
+            collected = self._collect_followers(my_user)
+            if not collected:
+                return stats
+            all_followers = [u for u in collected if u.lower() != my_user]
 
-        followers_link.first.click()
-        self._delay(2, 3)
-        self._log("Lista de seguidores aberta! Coletando...")
-
-        all_followers: set[str] = set()
-        stale_rounds = 0
-
-        while stale_rounds < 5 and not self._stop_requested:
-            before = len(all_followers)
-            new = self._get_visible_usernames()
-            all_followers.update(new)
-
-            if len(all_followers) == before:
-                stale_rounds += 1
-            else:
-                stale_rounds = 0
-                self._log(f"  {len(all_followers)} seguidores coletados...")
-
-            self._scroll_followers()
-            self._delay(1, 2)
-
-        all_followers.discard(my_user)
-        self._page.keyboard.press("Escape")
-        self._delay(1, 2)
-
-        self._log(f"Total: {len(all_followers)} seguidores para desocultar.")
+        self._log(f"{len(all_followers)} seguidores para desocultar.")
 
         total = len(all_followers)
         for i, username in enumerate(all_followers):

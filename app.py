@@ -17,6 +17,7 @@ from bot import (
     launch_chrome_for_login,
     launch_chrome_with_debug,
     load_follow_log,
+    load_followers_list,
 )
 from instagram_api import InstagramAPI, load_token_data, save_token_data
 from mercadolivre import (
@@ -450,6 +451,16 @@ class App(ctk.CTk):
             text_color="#FF9800",
         ).grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w")
 
+        # ── Info do cache de seguidores ──────────────────────────────────
+        self.followers_cache_label = ctk.CTkLabel(
+            tab,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#4CAF50",
+        )
+        self.followers_cache_label.pack(pady=(0, 4))
+        self._update_followers_cache_label()
+
         # ── Botões ────────────────────────────────────────────────────────
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
         btn_frame.pack(padx=10, pady=(0, 4), fill="x")
@@ -458,45 +469,58 @@ class App(ctk.CTk):
             btn_frame,
             text="1. Conectar Bot",
             command=self._on_connect_bot,
-            width=160,
+            width=150,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#FF9800",
             hover_color="#F57C00",
         )
-        self.hide_story_connect_btn.pack(side="left", padx=(0, 8))
+        self.hide_story_connect_btn.pack(side="left", padx=(0, 6))
 
         self.hide_story_btn = ctk.CTkButton(
             btn_frame,
             text="2. Ocultar Stories",
             command=self._on_hide_story,
-            width=200,
+            width=170,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
             fg_color="#9C27B0",
             hover_color="#7B1FA2",
         )
-        self.hide_story_btn.pack(side="left", padx=(0, 8))
+        self.hide_story_btn.pack(side="left", padx=(0, 6))
 
         self.unhide_story_btn = ctk.CTkButton(
             btn_frame,
-            text="Desocultar Todos",
+            text="Desocultar",
             command=self._on_unhide_story,
-            width=160,
+            width=120,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
             fg_color="#4CAF50",
             hover_color="#388E3C",
         )
-        self.unhide_story_btn.pack(side="left", padx=(0, 8))
+        self.unhide_story_btn.pack(side="left", padx=(0, 6))
+
+        self.recollect_btn = ctk.CTkButton(
+            btn_frame,
+            text="Recolectar",
+            command=self._on_recollect_followers,
+            width=120,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#2196F3",
+            hover_color="#1976D2",
+        )
+        self.recollect_btn.pack(side="left", padx=(0, 6))
 
         self.hide_story_stop_btn = ctk.CTkButton(
             btn_frame,
             text="Parar",
             command=self._on_stop,
-            width=80,
+            width=70,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
             state="disabled",
@@ -507,7 +531,7 @@ class App(ctk.CTk):
 
         # ── Log ──────────────────────────────────────────────────────────
         self.hide_story_log_box = ctk.CTkTextbox(
-            tab, width=660, height=220, state="disabled"
+            tab, width=660, height=200, state="disabled"
         )
         self.hide_story_log_box.pack(padx=10, pady=(8, 10))
 
@@ -1026,6 +1050,7 @@ class App(ctk.CTk):
                 self.after(0, lambda: self.unfollow_btn.configure(state="normal"))
                 self.after(0, lambda: self.hide_story_btn.configure(state="normal"))
                 self.after(0, lambda: self.unhide_story_btn.configure(state="normal"))
+                self.after(0, lambda: self.recollect_btn.configure(state="normal"))
 
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
@@ -1143,6 +1168,19 @@ class App(ctk.CTk):
         self.unhide_story_btn.configure(state="normal")
         self.hide_story_stop_btn.configure(state="disabled")
         self.hide_story_connect_btn.configure(state="normal")
+        self.recollect_btn.configure(state="normal")
+
+    def _update_followers_cache_label(self) -> None:
+        """Atualiza o label mostrando quantos seguidores estão no cache."""
+        cached = load_followers_list()
+        if cached:
+            text = f"{len(cached)} seguidores no cache. Pronto para ocultar!"
+        else:
+            text = (
+                "Nenhum seguidor no cache. "
+                "Clique em 'Ocultar Stories' para coletar."
+            )
+        self.followers_cache_label.configure(text=text)
 
     # ── Ocultar Stories callbacks ───────────────────────────────────────
 
@@ -1200,6 +1238,7 @@ class App(ctk.CTk):
                 self._running = False
                 self._bot.on_log = self._safe_log
                 self.after(0, self._reset_buttons)
+                self.after(0, self._update_followers_cache_label)
 
         self._submit_task(_task)
 
@@ -1232,6 +1271,41 @@ class App(ctk.CTk):
                 self._running = False
                 self._bot.on_log = self._safe_log
                 self.after(0, self._reset_buttons)
+
+        self._submit_task(_task)
+
+    def _on_recollect_followers(self) -> None:
+        """Força a recoleta dos seguidores do Instagram."""
+        if not self._bot:
+            self._append_hide_story_log(
+                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
+            )
+            return
+
+        my_user = (
+            self.hide_story_my_user_entry.get().strip().lstrip("@").strip("/")
+        )
+        if not my_user:
+            self._append_hide_story_log("Preencha seu @ (nome de usuário)!")
+            return
+
+        self._bot._stop_requested = False
+        self._bot.on_log = self._safe_hide_story_log
+        self.recollect_btn.configure(state="disabled")
+        self.hide_story_stop_btn.configure(state="normal")
+        self._running = True
+
+        def _task():
+            try:
+                self._bot._collect_followers(my_user)
+                self._safe_hide_story_log("Lista de seguidores atualizada!")
+            except Exception as exc:
+                self._safe_hide_story_log(f"Erro: {exc}")
+            finally:
+                self._running = False
+                self._bot.on_log = self._safe_log
+                self.after(0, self._reset_buttons)
+                self.after(0, self._update_followers_cache_label)
 
         self._submit_task(_task)
 
