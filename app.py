@@ -101,11 +101,13 @@ class App(ctk.CTk):
 
         self.tab_bot = self.tabview.add("Bot de Follow")
         self.tab_unfollow = self.tabview.add("Limpar Desumildes")
+        self.tab_hide_story = self.tabview.add("Ocultar Stories")
         self.tab_offers = self.tabview.add("Radar de Ofertas")
         self.tab_dashboard = self.tabview.add("Dashboard de Métricas")
 
         self._build_bot_tab()
         self._build_unfollow_tab()
+        self._build_hide_story_tab()
         self._build_offers_tab()
         self._build_dashboard_tab()
 
@@ -385,6 +387,129 @@ class App(ctk.CTk):
         else:
             text = f"{count} follows registrados no histórico."
         self.follow_count_label.configure(text=text)
+
+    # ── Aba Ocultar Stories ──────────────────────────────────────────────
+
+    def _build_hide_story_tab(self) -> None:
+        """Constrói a aba de ocultar stories de seguidores."""
+        tab = self.tab_hide_story
+
+        # ── Título ────────────────────────────────────────────────────────
+        ctk.CTkLabel(
+            tab,
+            text="Ocultar Stories",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(pady=(10, 2))
+
+        ctk.CTkLabel(
+            tab,
+            text="Oculta seus stories de todos, exceto o perfil escolhido",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        ).pack(pady=(0, 8))
+
+        # ── Configuração ──────────────────────────────────────────────────
+        config_frame = ctk.CTkFrame(tab)
+        config_frame.pack(padx=10, pady=(0, 8), fill="x")
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Seu @ (sem @):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
+
+        self.hide_story_my_user_entry = ctk.CTkEntry(
+            config_frame, placeholder_text="ex: seu_usuario", width=250
+        )
+        self.hide_story_my_user_entry.grid(
+            row=0, column=1, padx=12, pady=(12, 4), sticky="w"
+        )
+
+        # Auto-preencher username
+        saved = load_token_data()
+        if saved and saved.get("username"):
+            self.hide_story_my_user_entry.insert(0, saved["username"])
+
+        ctk.CTkLabel(
+            config_frame,
+            text="@ permitido (quem PODE ver):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=1, column=0, padx=12, pady=4, sticky="w")
+
+        self.allowed_user_entry = ctk.CTkEntry(
+            config_frame, placeholder_text="ex: perfil_teste", width=250
+        )
+        self.allowed_user_entry.grid(
+            row=1, column=1, padx=12, pady=4, sticky="w"
+        )
+
+        ctk.CTkLabel(
+            config_frame,
+            text="Apenas este perfil verá seus stories. Todos os outros serão ocultados.",
+            font=ctk.CTkFont(size=11),
+            text_color="#FF9800",
+        ).grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w")
+
+        # ── Botões ────────────────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_frame.pack(padx=10, pady=(0, 4), fill="x")
+
+        self.hide_story_connect_btn = ctk.CTkButton(
+            btn_frame,
+            text="1. Conectar Bot",
+            command=self._on_connect_bot,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#FF9800",
+            hover_color="#F57C00",
+        )
+        self.hide_story_connect_btn.pack(side="left", padx=(0, 8))
+
+        self.hide_story_btn = ctk.CTkButton(
+            btn_frame,
+            text="2. Ocultar Stories",
+            command=self._on_hide_story,
+            width=200,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#9C27B0",
+            hover_color="#7B1FA2",
+        )
+        self.hide_story_btn.pack(side="left", padx=(0, 8))
+
+        self.unhide_story_btn = ctk.CTkButton(
+            btn_frame,
+            text="Desocultar Todos",
+            command=self._on_unhide_story,
+            width=160,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#4CAF50",
+            hover_color="#388E3C",
+        )
+        self.unhide_story_btn.pack(side="left", padx=(0, 8))
+
+        self.hide_story_stop_btn = ctk.CTkButton(
+            btn_frame,
+            text="Parar",
+            command=self._on_stop,
+            width=80,
+            height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            state="disabled",
+            fg_color="#F44336",
+            hover_color="#D32F2F",
+        )
+        self.hide_story_stop_btn.pack(side="left")
+
+        # ── Log ──────────────────────────────────────────────────────────
+        self.hide_story_log_box = ctk.CTkTextbox(
+            tab, width=660, height=220, state="disabled"
+        )
+        self.hide_story_log_box.pack(padx=10, pady=(8, 10))
 
     def _build_offers_tab(self) -> None:
         """Constrói a aba do Radar de Ofertas (ML → Instagram)."""
@@ -899,6 +1024,8 @@ class App(ctk.CTk):
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
                 self.after(0, lambda: self.connect_btn.configure(state="normal"))
                 self.after(0, lambda: self.unfollow_btn.configure(state="normal"))
+                self.after(0, lambda: self.hide_story_btn.configure(state="normal"))
+                self.after(0, lambda: self.unhide_story_btn.configure(state="normal"))
 
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
@@ -999,8 +1126,10 @@ class App(ctk.CTk):
             self._bot.request_stop()
             self._safe_log("Parando... aguarde a ação atual finalizar.")
             self._safe_unfollow_log("Parando... aguarde a ação atual finalizar.")
+            self._safe_hide_story_log("Parando... aguarde a ação atual finalizar.")
         self.stop_btn.configure(state="disabled")
         self.unfollow_stop_btn.configure(state="disabled")
+        self.hide_story_stop_btn.configure(state="disabled")
 
     def _reset_buttons(self) -> None:
         self.start_btn.configure(state="normal")
@@ -1010,6 +1139,101 @@ class App(ctk.CTk):
         self.unfollow_btn.configure(state="normal")
         self.unfollow_stop_btn.configure(state="disabled")
         self.unfollow_connect_btn.configure(state="normal")
+        self.hide_story_btn.configure(state="normal")
+        self.unhide_story_btn.configure(state="normal")
+        self.hide_story_stop_btn.configure(state="disabled")
+        self.hide_story_connect_btn.configure(state="normal")
+
+    # ── Ocultar Stories callbacks ───────────────────────────────────────
+
+    def _append_hide_story_log(self, msg: str) -> None:
+        self.hide_story_log_box.configure(state="normal")
+        self.hide_story_log_box.insert("end", msg + "\n")
+        self.hide_story_log_box.see("end")
+        self.hide_story_log_box.configure(state="disabled")
+
+    def _safe_hide_story_log(self, msg: str) -> None:
+        self.after(0, self._append_hide_story_log, msg)
+
+    def _on_hide_story(self) -> None:
+        """Oculta stories de todos exceto o perfil permitido."""
+        my_user = (
+            self.hide_story_my_user_entry.get().strip().lstrip("@").strip("/")
+        )
+        allowed = (
+            self.allowed_user_entry.get().strip().lstrip("@").strip("/")
+        )
+
+        if not my_user:
+            self._append_hide_story_log("Preencha seu @ (nome de usuário)!")
+            return
+
+        if not allowed:
+            self._append_hide_story_log(
+                "Preencha o @ do perfil que PODE ver seus stories!"
+            )
+            return
+
+        if not self._bot:
+            self._append_hide_story_log(
+                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
+            )
+            return
+
+        self._bot._stop_requested = False
+        self._bot.on_log = self._safe_hide_story_log
+        self.hide_story_btn.configure(state="disabled")
+        self.unhide_story_btn.configure(state="disabled")
+        self.hide_story_stop_btn.configure(state="normal")
+        self.hide_story_connect_btn.configure(state="disabled")
+        self._running = True
+
+        def _task():
+            try:
+                self._bot.hide_story_from_all_except(
+                    allowed_username=allowed,
+                    my_username=my_user,
+                )
+            except Exception as exc:
+                self._safe_hide_story_log(f"Erro: {exc}")
+            finally:
+                self._running = False
+                self._bot.on_log = self._safe_log
+                self.after(0, self._reset_buttons)
+
+        self._submit_task(_task)
+
+    def _on_unhide_story(self) -> None:
+        """Remove ocultação de stories de todos os seguidores."""
+        if not self._bot:
+            self._append_hide_story_log(
+                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
+            )
+            return
+
+        self._bot._stop_requested = False
+        self._bot.on_log = self._safe_hide_story_log
+        self.hide_story_btn.configure(state="disabled")
+        self.unhide_story_btn.configure(state="disabled")
+        self.hide_story_stop_btn.configure(state="normal")
+        self.hide_story_connect_btn.configure(state="disabled")
+        self._running = True
+
+        my_user = (
+            self.hide_story_my_user_entry.get().strip().lstrip("@").strip("/")
+        )
+
+        def _task():
+            try:
+                self._bot.unhide_story_from_all(my_username=my_user)
+            except Exception as exc:
+                self._safe_hide_story_log(f"Erro: {exc}")
+            finally:
+                self._running = False
+                self._bot.on_log = self._safe_log
+                self.after(0, self._reset_buttons)
+
+        self._submit_task(_task)
 
     # ── Ofertas callbacks ─────────────────────────────────────────────────
 
