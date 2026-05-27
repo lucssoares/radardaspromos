@@ -889,97 +889,166 @@ class InstagramBot:
 
     # ── Ocultar stories de todos exceto um perfil ─────────────────────
 
-    def _navigate_to_hide_story_settings(self) -> bool:
-        """Navega até a tela 'Ocultar story e vídeo ao vivo de'."""
-        self._log("Navegando para configurações do Instagram...")
-        self._page.goto(
-            "https://www.instagram.com/accounts/settings/",
-            wait_until="load",
-            timeout=30000,
-        )
-        self._delay(2, 3)
+    def _hide_story_from_user(self, username: str) -> bool:
+        """Visita o perfil e clica em '...' → 'Ocultar seu story'.
 
-        # Tentar clicar em "Quem pode ver seu conteúdo" / "Who can see your content"
-        # Depois clicar em "Ocultar story e vídeo ao vivo" / "Hide story and live"
-        # Depois clicar em "Ocultar story e vídeo ao vivo de" / "Hide story and live from"
+        Retorna True se conseguiu ocultar, False caso contrário.
+        """
+        try:
+            self._page.goto(
+                f"https://www.instagram.com/{username}/",
+                wait_until="load",
+                timeout=20000,
+            )
+            self._delay(3, 5)
 
-        # Método 1: Navegar diretamente via URL (mais confiável)
-        settings_urls = [
-            "https://www.instagram.com/accounts/who_can_see_your_content/",
-            "https://www.instagram.com/accounts/privacy_and_security/",
-        ]
+            # Clicar no menu "..." (três pontos)
+            dots_btn = self._page.locator(
+                "svg[aria-label='Opções'], "
+                "svg[aria-label='Options'], "
+                "div[role='button'] svg circle"
+            )
 
-        for url in settings_urls:
-            try:
-                self._page.goto(url, wait_until="load", timeout=15000)
-                self._delay(2, 3)
-                break
-            except Exception:
-                continue
+            if dots_btn.count() == 0:
+                # Fallback: procurar pelo botão que contém os 3 pontos
+                dots_btn = self._page.locator(
+                    "button:has(svg circle), "
+                    "div[role='button']:has(svg circle)"
+                )
 
-        # Procurar link para "Hide story and live" / "Ocultar story"
-        hide_link = self._page.locator(
-            "a:has-text('Ocultar story'), "
-            "a:has-text('Hide story'), "
-            "a:has-text('ocultar story'), "
-            "span:has-text('Ocultar story'), "
-            "span:has-text('Hide story')"
-        )
+            if dots_btn.count() == 0:
+                self._log(f"  @{username}: menu '...' não encontrado.")
+                return False
 
-        if hide_link.count() > 0:
-            hide_link.first.click()
-            self._delay(2, 3)
-        else:
-            self._log("Tentando encontrar via texto na página...")
-            # Buscar por texto visível e clicar
+            dots_btn.first.click()
+            self._delay(1.5, 2.5)
+
+            # Procurar "Ocultar seu story" / "Hide your story"
+            hide_option = self._page.locator(
+                "button:has-text('Ocultar seu story'), "
+                "button:has-text('Ocultar sua história'), "
+                "button:has-text('Hide your story')"
+            )
+
+            if hide_option.count() == 0:
+                # Tentar via JavaScript
+                found = self._page.evaluate("""() => {
+                    const buttons = document.querySelectorAll(
+                        'button, div[role="button"]'
+                    );
+                    for (const btn of buttons) {
+                        const text = (btn.innerText || '').toLowerCase();
+                        if (text.includes('ocultar seu story')
+                            || text.includes('ocultar sua hist')
+                            || text.includes('hide your story')) {
+                            btn.click();
+                            return 'found';
+                        }
+                    }
+                    // Verificar se já está oculto
+                    for (const btn of buttons) {
+                        const text = (btn.innerText || '').toLowerCase();
+                        if (text.includes('exibir seu story')
+                            || text.includes('mostrar seu story')
+                            || text.includes('unhide your story')
+                            || text.includes('show your story')) {
+                            return 'already_hidden';
+                        }
+                    }
+                    return 'not_found';
+                }""")
+
+                if found == "already_hidden":
+                    self._log(f"  @{username}: já oculto.")
+                    # Fechar o menu
+                    self._page.keyboard.press("Escape")
+                    self._delay(0.5, 1)
+                    return True
+                if found == "not_found":
+                    self._log(
+                        f"  @{username}: opção 'Ocultar story' "
+                        f"não encontrada no menu."
+                    )
+                    self._page.keyboard.press("Escape")
+                    self._delay(0.5, 1)
+                    return False
+                # found == 'found' → já clicou
+            else:
+                hide_option.first.click()
+
+            self._delay(1, 2)
+            return True
+
+        except Exception as exc:
+            self._log(f"  Erro com @{username}: {exc}")
+            return False
+
+    def _unhide_story_from_user(self, username: str) -> bool:
+        """Visita o perfil e clica em '...' → 'Exibir seu story'.
+
+        Retorna True se conseguiu desocultar, False caso contrário.
+        """
+        try:
+            self._page.goto(
+                f"https://www.instagram.com/{username}/",
+                wait_until="load",
+                timeout=20000,
+            )
+            self._delay(3, 5)
+
+            # Clicar no menu "..." (três pontos)
+            dots_btn = self._page.locator(
+                "svg[aria-label='Opções'], "
+                "svg[aria-label='Options'], "
+                "div[role='button'] svg circle"
+            )
+
+            if dots_btn.count() == 0:
+                dots_btn = self._page.locator(
+                    "button:has(svg circle), "
+                    "div[role='button']:has(svg circle)"
+                )
+
+            if dots_btn.count() == 0:
+                self._log(f"  @{username}: menu '...' não encontrado.")
+                return False
+
+            dots_btn.first.click()
+            self._delay(1.5, 2.5)
+
+            # Procurar "Exibir seu story" / "Unhide your story"
             found = self._page.evaluate("""() => {
-                const links = document.querySelectorAll('a, span, div');
-                for (const el of links) {
-                    const text = el.innerText || '';
-                    if (text.toLowerCase().includes('ocultar story')
-                        || text.toLowerCase().includes('hide story')) {
-                        el.click();
-                        return true;
+                const buttons = document.querySelectorAll(
+                    'button, div[role="button"]'
+                );
+                for (const btn of buttons) {
+                    const text = (btn.innerText || '').toLowerCase();
+                    if (text.includes('exibir seu story')
+                        || text.includes('mostrar seu story')
+                        || text.includes('unhide your story')
+                        || text.includes('show your story')) {
+                        btn.click();
+                        return 'found';
                     }
                 }
-                return false;
+                return 'not_found';
             }""")
-            if not found:
+
+            if found == "not_found":
                 self._log(
-                    "Não encontrei a opção 'Ocultar story'. "
-                    "Tente manualmente: Configurações → "
-                    "Quem pode ver seu conteúdo → "
-                    "Ocultar story e vídeo ao vivo."
+                    f"  @{username}: opção de desocultar "
+                    f"não encontrada (pode já estar visível)."
                 )
+                self._page.keyboard.press("Escape")
+                self._delay(0.5, 1)
                 return False
-            self._delay(2, 3)
 
-        # Agora procurar "Ocultar story e vídeo ao vivo de"
-        # ou "Hide story and live from"
-        hide_from_link = self._page.locator(
-            "a:has-text('Ocultar story e vídeo ao vivo de'), "
-            "a:has-text('Hide story and live from'), "
-            "span:has-text('Ocultar story e vídeo ao vivo de'), "
-            "span:has-text('Hide story and live from')"
-        )
-
-        if hide_from_link.count() > 0:
-            hide_from_link.first.click()
-            self._delay(2, 3)
+            self._delay(1, 2)
             return True
 
-        # Pode já estar na tela certa se a lista de seguidores apareceu
-        search_input = self._page.locator(
-            "input[placeholder*='Pesquis'], "
-            "input[placeholder*='Search'], "
-            "input[name='queryBox']"
-        )
-        if search_input.count() > 0:
-            self._log("Tela de ocultar story encontrada!")
-            return True
-
-        self._log("Não encontrei a tela de seleção de seguidores.")
-        return False
+        except Exception as exc:
+            self._log(f"  Erro com @{username}: {exc}")
+            return False
 
     def hide_story_from_all_except(
         self,
@@ -988,16 +1057,15 @@ class InstagramBot:
     ) -> dict:
         """Oculta stories de todos os seguidores exceto o perfil permitido.
 
-        Navega à tela de configurações do Instagram e marca todos os
-        seguidores para ocultar, exceto o username fornecido.
+        Para cada seguidor, visita o perfil, clica nos '...' e seleciona
+        'Ocultar seu story'. Pula o perfil permitido.
         """
-        stats = {"hidden": 0, "skipped": 0, "errors": 0}
+        stats = {"hidden": 0, "skipped": 0, "already": 0, "errors": 0}
         allowed = allowed_username.lower().strip().lstrip("@")
 
         self._log(f"Ocultando stories de todos exceto @{allowed}...")
         self._stop_requested = False
 
-        # Primeiro, coletar a lista de seguidores
         if not my_username:
             self._log("Username não fornecido. Informe seu @.")
             return stats
@@ -1060,14 +1128,11 @@ class InstagramBot:
             self._log("Nenhum seguidor para ocultar.")
             return stats
 
-        # Navegar para as configurações de ocultar story
-        if not self._navigate_to_hide_story_settings():
-            return stats
+        # Visitar cada perfil e ocultar story
+        self._log("Visitando cada perfil para ocultar stories...")
+        total = len(all_followers)
 
-        self._log("Marcando seguidores para ocultar stories...")
-
-        # Processar cada seguidor usando a busca
-        for username in all_followers:
+        for i, username in enumerate(all_followers):
             if self._stop_requested:
                 self._log("Parado pelo usuário.")
                 break
@@ -1076,78 +1141,14 @@ class InstagramBot:
                 stats["skipped"] += 1
                 continue
 
-            try:
-                # Buscar o seguidor pelo nome
-                search_input = self._page.locator(
-                    "input[placeholder*='Pesquis'], "
-                    "input[placeholder*='Search'], "
-                    "input[name='queryBox']"
-                )
+            self._log(f"[{i + 1}/{total}] Ocultando @{username}...")
 
-                if search_input.count() == 0:
-                    self._log("Campo de busca não encontrado.")
-                    stats["errors"] += 1
-                    continue
-
-                # Limpar campo e digitar username
-                search_input.first.click()
-                search_input.first.fill("")
-                self._delay(0.3, 0.5)
-                search_input.first.fill(username)
-                self._delay(1.5, 2.5)
-
-                # Procurar o resultado e clicar no checkbox/toggle
-                result = self._page.locator(
-                    f"span:has-text('{username}')"
-                ).first
-
-                if result.count() == 0:
-                    self._log(f"  @{username}: não encontrado na busca.")
-                    stats["errors"] += 1
-                    # Limpar busca
-                    search_input.first.fill("")
-                    self._delay(0.5, 1)
-                    continue
-
-                # Verificar se já está marcado (tem check azul)
-                parent = result.locator("xpath=ancestor::div[1]/..")
-                already_checked = parent.locator(
-                    "[aria-checked='true'], "
-                    "div[style*='background-color: rgb(0, 149, 246)'], "
-                    "svg[aria-label*='Checkmark'], "
-                    "svg[aria-label*='check']"
-                )
-
-                if already_checked.count() > 0:
-                    self._log(f"  @{username}: já oculto.")
-                    stats["skipped"] += 1
-                else:
-                    # Clicar no item para marcar
-                    result.click()
-                    self._delay(0.5, 1)
-                    stats["hidden"] += 1
-                    if stats["hidden"] % 10 == 0:
-                        self._log(
-                            f"  {stats['hidden']} ocultados..."
-                        )
-
-                # Limpar busca para próximo
-                search_input.first.fill("")
-                self._delay(0.5, 1)
-
-            except Exception as exc:
-                self._log(f"  Erro com @{username}: {exc}")
+            if self._hide_story_from_user(username):
+                stats["hidden"] += 1
+            else:
                 stats["errors"] += 1
-                try:
-                    search_input = self._page.locator(
-                        "input[placeholder*='Pesquis'], "
-                        "input[placeholder*='Search']"
-                    )
-                    if search_input.count() > 0:
-                        search_input.first.fill("")
-                except Exception:
-                    pass
-                self._delay(0.5, 1)
+
+            self._delay(2, 4)
 
         self._log("=" * 50)
         self._log("Ocultação de stories finalizada!")
@@ -1158,52 +1159,84 @@ class InstagramBot:
         return stats
 
     def unhide_story_from_all(self, my_username: str = "") -> dict:
-        """Remove a ocultação de todos os seguidores (desoculta todos)."""
-        stats = {"unhidden": 0, "errors": 0}
+        """Remove a ocultação visitando cada perfil e clicando em desocultar."""
+        stats = {"unhidden": 0, "skipped": 0, "errors": 0}
 
         self._log("Removendo ocultação de stories de todos...")
         self._stop_requested = False
 
-        if not self._navigate_to_hide_story_settings():
+        if not my_username:
+            self._log("Username não fornecido. Informe seu @.")
             return stats
 
-        self._delay(1, 2)
+        my_user = my_username.lower().strip().lstrip("@")
+        self._log("Coletando lista de seguidores...")
 
-        # Nessa tela, os seguidores já marcados (ocultos) aparecem com check
-        # Precisamos clicar neles para desmarcar
-        # Scroll e desmarcar todos
-        stale_rounds = 0
-        while stale_rounds < 5 and not self._stop_requested:
-            checked_items = self._page.locator(
-                "[aria-checked='true'], "
-                "div[role='button']:has(svg[aria-label*='Checkmark']), "
-                "div[role='button']:has(svg[aria-label*='check'])"
+        self._page.goto(
+            f"https://www.instagram.com/{my_user}/",
+            wait_until="load",
+            timeout=30000,
+        )
+        self._delay(2, 3)
+
+        # Abrir lista de seguidores
+        followers_link = self._page.locator(
+            f'a[href="/{my_user}/followers/"]'
+        )
+        if followers_link.count() == 0:
+            followers_link = self._page.locator(
+                "a:has-text('seguidor'), a:has-text('follower')"
             )
+        if followers_link.count() == 0:
+            self._log("Não encontrei o link de seguidores.")
+            return stats
 
-            count = checked_items.count()
-            if count == 0:
+        followers_link.first.click()
+        self._delay(2, 3)
+        self._log("Lista de seguidores aberta! Coletando...")
+
+        all_followers: set[str] = set()
+        stale_rounds = 0
+
+        while stale_rounds < 5 and not self._stop_requested:
+            before = len(all_followers)
+            new = self._get_visible_usernames()
+            all_followers.update(new)
+
+            if len(all_followers) == before:
                 stale_rounds += 1
-                self._scroll_followers()
-                self._delay(1, 2)
-                continue
-
-            stale_rounds = 0
-            for i in range(count):
-                if self._stop_requested:
-                    break
-                try:
-                    checked_items.nth(i).click()
-                    stats["unhidden"] += 1
-                    self._delay(0.3, 0.5)
-                except Exception:
-                    stats["errors"] += 1
+            else:
+                stale_rounds = 0
+                self._log(f"  {len(all_followers)} seguidores coletados...")
 
             self._scroll_followers()
             self._delay(1, 2)
 
+        all_followers.discard(my_user)
+        self._page.keyboard.press("Escape")
+        self._delay(1, 2)
+
+        self._log(f"Total: {len(all_followers)} seguidores para desocultar.")
+
+        total = len(all_followers)
+        for i, username in enumerate(all_followers):
+            if self._stop_requested:
+                self._log("Parado pelo usuário.")
+                break
+
+            self._log(f"[{i + 1}/{total}] Desocultando @{username}...")
+
+            if self._unhide_story_from_user(username):
+                stats["unhidden"] += 1
+            else:
+                stats["skipped"] += 1
+
+            self._delay(2, 4)
+
         self._log("=" * 50)
         self._log("Desocultação finalizada!")
         self._log(f"  Desocultados: {stats['unhidden']}")
+        self._log(f"  Já visíveis/pulados: {stats['skipped']}")
         self._log(f"  Erros: {stats['errors']}")
         self._log("=" * 50)
         return stats
