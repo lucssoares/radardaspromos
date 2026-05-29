@@ -677,7 +677,12 @@ class InstagramBot:
     # ── Unfollow (limpeza de desumildes) ──────────────────────────────────
 
     def _check_follows_back(self, username: str) -> bool:
-        """Verifica se @username te segue de volta."""
+        """Verifica se @username te segue de volta.
+
+        Lê o badge 'Segue você' / 'Follows you' que o Instagram mostra
+        no topo do perfil. Espera o React renderizar e tenta várias vezes
+        antes de decidir.
+        """
         page2 = self._context.new_page()
         try:
             page2.goto(
@@ -685,20 +690,63 @@ class InstagramBot:
                 wait_until="load",
                 timeout=20000,
             )
-            self._delay(3, 5)
 
-            # Verificar se o botão mostra "Seguindo" (= você segue essa pessoa)
-            # e se há indicação de "Segue você" / "Follows you"
-            text = page2.evaluate("""() => {
-                const header = document.querySelector('header');
-                return header ? header.innerText : '';
-            }""")
+            # Espera o cabeçalho do perfil renderizar (botão de seguir
+            # aparece quando a página está pronta).
+            try:
+                page2.wait_for_selector(
+                    "header button, "
+                    "main header section, "
+                    "div[role='button']:has-text('Seguindo'), "
+                    "div[role='button']:has-text('Following')",
+                    timeout=12000,
+                )
+            except Exception:
+                pass
 
-            follows_back = (
-                "segue você" in text.lower()
-                or "follows you" in text.lower()
+            self._delay(2, 4)
+
+            # Tenta ler o badge "Segue você" algumas vezes (React pode
+            # demorar para montar o texto, mesmo depois do header aparecer).
+            rendered_once = False
+            for _ in range(5):
+                result = page2.evaluate("""() => {
+                    const needles = [
+                        'segue você', 'segue voce',
+                        'follows you'
+                    ];
+                    const header = document.querySelector('header');
+                    const headerText = header
+                        ? (header.innerText || '').toLowerCase() : '';
+                    const bodyText =
+                        (document.body.innerText || '').toLowerCase();
+                    const found = needles.some(
+                        n => headerText.includes(n) || bodyText.includes(n)
+                    );
+                    return {
+                        found,
+                        rendered: !!header,
+                    };
+                }""")
+
+                if result["found"]:
+                    return True
+                if result["rendered"]:
+                    rendered_once = True
+                self._delay(1.5, 2.5)
+
+            if rendered_once:
+                # Página renderizou em todas as tentativas e nunca apareceu
+                # o badge -> a pessoa não te segue de volta.
+                return False
+
+            # Nunca renderizou (erro de carregamento): por segurança não faz
+            # unfollow.
+            self._log(
+                f"  @{username}: não foi possível confirmar 'Segue você'. "
+                f"Pulando por segurança."
             )
-            return follows_back
+            return True
         except Exception:
             return True  # Em caso de erro, não faz unfollow (segurança)
         finally:
@@ -715,25 +763,79 @@ class InstagramBot:
             )
             self._delay(2, 4)
 
-            # Clicar em "Seguindo" / "Following"
+            # Clicar em "Seguindo" / "Following". O Instagram usa tanto
+            # <button> quanto <div role="button"> dependendo do layout.
             following_btn = page2.locator(
                 "header button:has-text('Seguindo'), "
-                "header button:has-text('Following')"
+                "header button:has-text('Following'), "
+                "header div[role='button']:has-text('Seguindo'), "
+                "header div[role='button']:has-text('Following'), "
+                "header button[aria-label='Seguindo'], "
+                "header button[aria-label='Following'], "
+                "header svg[aria-label='Seguindo'], "
+                "header svg[aria-label='Following']"
             )
+            if following_btn.count() == 0:
+                # Fallback: qualquer botão do header com esse texto.
+                following_btn = page2.locator(
+                    "button:has-text('Seguindo'), "
+                    "button:has-text('Following'), "
+                    "div[role='button']:has-text('Seguindo'), "
+                    "div[role='button']:has-text('Following')"
+                )
             if following_btn.count() == 0:
                 self._log(f"  @{username}: botão 'Seguindo' não encontrado.")
                 return False
 
             following_btn.first.click()
+
+            # Esperar o popup de confirmação aparecer.
+            try:
+                page2.wait_for_selector("div[role='dialog']", timeout=8000)
+            except Exception:
+                pass
             self._delay(1, 2)
 
-            # Confirmar unfollow no popup
+            # Confirmar unfollow no popup. O botão fica dentro do dialog
+            # e pode ser <button> ou <div role="button">.
             unfollow_btn = page2.locator(
-                "button:has-text('Deixar de seguir'), "
-                "button:has-text('Unfollow')"
+                "div[role='dialog'] button:has-text('Deixar de seguir'), "
+                "div[role='dialog'] button:has-text('Unfollow'), "
+                "div[role='dialog'] [role='button']:has-text('Deixar de seguir'), "
+                "div[role='dialog'] [role='button']:has-text('Unfollow')"
             )
+            if unfollow_btn.count() == 0:
+                # Fallback fora do seletor de dialog.
+                unfollow_btn = page2.locator(
+                    "button:has-text('Deixar de seguir'), "
+                    "button:has-text('Unfollow'), "
+                    "[role='button']:has-text('Deixar de seguir'), "
+                    "[role='button']:has-text('Unfollow')"
+                )
+
             if unfollow_btn.count() > 0:
                 unfollow_btn.first.click()
+                remove_from_follow_log(username)
+                self._delay(1, 2)
+                return True
+
+            # Última tentativa via JavaScript.
+            clicked = page2.evaluate("""() => {
+                const els = document.querySelectorAll(
+                    'div[role="dialog"] button, '
+                    + 'div[role="dialog"] [role="button"], '
+                    + 'button, [role="button"]'
+                );
+                for (const el of els) {
+                    const t = (el.innerText || '').toLowerCase().trim();
+                    if (t === 'deixar de seguir' || t === 'unfollow') {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if clicked:
                 remove_from_follow_log(username)
                 self._delay(1, 2)
                 return True
