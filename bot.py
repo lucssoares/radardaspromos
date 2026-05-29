@@ -676,82 +676,6 @@ class InstagramBot:
 
     # ── Unfollow (limpeza de desumildes) ──────────────────────────────────
 
-    def _check_follows_back(self, username: str) -> bool:
-        """Verifica se @username te segue de volta.
-
-        Lê o badge 'Segue você' / 'Follows you' que o Instagram mostra
-        no topo do perfil. Espera o React renderizar e tenta várias vezes
-        antes de decidir.
-        """
-        page2 = self._context.new_page()
-        try:
-            page2.goto(
-                f"https://www.instagram.com/{username}/",
-                wait_until="load",
-                timeout=20000,
-            )
-
-            # Espera o cabeçalho do perfil renderizar (botão de seguir
-            # aparece quando a página está pronta).
-            try:
-                page2.wait_for_selector(
-                    "header button, "
-                    "main header section, "
-                    "div[role='button']:has-text('Seguindo'), "
-                    "div[role='button']:has-text('Following')",
-                    timeout=12000,
-                )
-            except Exception:
-                pass
-
-            self._delay(2, 4)
-
-            # Tenta ler o badge "Segue você" algumas vezes (React pode
-            # demorar para montar o texto, mesmo depois do header aparecer).
-            rendered_once = False
-            for _ in range(5):
-                result = page2.evaluate("""() => {
-                    const needles = [
-                        'segue você', 'segue voce',
-                        'follows you'
-                    ];
-                    const header = document.querySelector('header');
-                    const headerText = header
-                        ? (header.innerText || '').toLowerCase() : '';
-                    const bodyText =
-                        (document.body.innerText || '').toLowerCase();
-                    const found = needles.some(
-                        n => headerText.includes(n) || bodyText.includes(n)
-                    );
-                    return {
-                        found,
-                        rendered: !!header,
-                    };
-                }""")
-
-                if result["found"]:
-                    return True
-                if result["rendered"]:
-                    rendered_once = True
-                self._delay(1.5, 2.5)
-
-            if rendered_once:
-                # Página renderizou em todas as tentativas e nunca apareceu
-                # o badge -> a pessoa não te segue de volta.
-                return False
-
-            # Nunca renderizou (erro de carregamento): por segurança não faz
-            # unfollow.
-            self._log(
-                f"  @{username}: não foi possível confirmar 'Segue você'. "
-                f"Pulando por segurança."
-            )
-            return True
-        except Exception:
-            return True  # Em caso de erro, não faz unfollow (segurança)
-        finally:
-            page2.close()
-
     def _unfollow_user(self, username: str) -> bool:
         """Deixa de seguir um usuário."""
         page2 = self._context.new_page()
@@ -908,32 +832,39 @@ class InstagramBot:
     ) -> dict:
         """Deixa de seguir quem não segue de volta após X dias.
 
-        Na primeira execução, coleta todos os 'seguindo' do Instagram
-        e registra no follow_log.json com a data de hoje.
-        Nas próximas, usa o registro para aplicar a regra de dias.
+        Método confiável: coleta a lista de quem você SEGUE e a lista de
+        quem TE SEGUE, e compara os dois conjuntos. Só faz unfollow de
+        quem NÃO está na sua lista de seguidores (não te segue de volta).
+
+        A regra dos X dias é aplicada via follow_log.json: na primeira
+        execução todos os 'seguindo' são registrados com a data de hoje;
+        nas próximas, só são removidos os que já passaram do prazo.
         """
         stats = {"unfollowed": 0, "follows_back": 0, "too_recent": 0,
                  "errors": 0, "checked": 0, "mapped": 0}
+        my_user = my_username.lower().strip().lstrip("@").strip("/")
         follow_log = load_follow_log()
+        self._stop_requested = False
 
         self._log(f"Iniciando limpeza (regra: {days_threshold} dias)...")
 
-        # Se o log está vazio ou tem poucos registros, mapear do Instagram
+        # ── 1. Coletar quem você segue ────────────────────────────────
+        self._log("Coletando quem você segue...")
+        following_list = self._collect_following_list(my_user)
+        if not following_list:
+            self._log("Não consegui coletar a lista de 'seguindo'.")
+            return stats
+        following_norm = {u.lower().strip().lstrip("@") for u in following_list}
+        following_norm.discard(my_user)
+
+        # ── 2. Primeira execução: mapear datas e sair ─────────────────
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
         if len(follow_log) < 5:
-            self._log("Mapeando quem você segue no Instagram...")
-            following_list = self._collect_following_list(my_username)
-
-            if not following_list:
-                self._log("Não consegui coletar a lista de seguindo.")
-                return stats
-
-            # Registrar todos com data de hoje
-            now_str = datetime.now(timezone.utc).isoformat()
-            for u in following_list:
+            for u in following_norm:
                 if u not in follow_log:
                     follow_log[u] = now_str
                     stats["mapped"] += 1
-
             save_follow_log(follow_log)
             self._log(
                 f"Mapeamento concluído! {stats['mapped']} perfis registrados."
@@ -945,28 +876,66 @@ class InstagramBot:
             self._log("=" * 50)
             return stats
 
-        self._log(f"  {len(follow_log)} follows registrados no histórico.")
-        self._delay(1, 2)
+        if self._stop_requested:
+            return stats
 
-        now = datetime.now(timezone.utc)
+        # ── 3. Coletar quem te segue (lista confiável) ────────────────
+        self._log("Coletando quem te segue (seus seguidores)...")
+        followers_list = self._collect_followers(my_user)
+        if not followers_list:
+            self._log(
+                "Não consegui coletar seus seguidores. "
+                "Abortando por segurança (para não dar unfollow errado)."
+            )
+            return stats
+        followers_norm = {
+            u.lower().strip().lstrip("@") for u in followers_list
+        }
+
+        # ── 4. Determinar candidatos ──────────────────────────────────
+        # Candidato = você segue + ele NÃO te segue + passou do prazo.
         candidates = []
-        for username, date_str in follow_log.items():
+        for username in following_norm:
+            if username in followers_norm:
+                stats["follows_back"] += 1
+                continue
+
+            date_str = follow_log.get(username)
+            if not date_str:
+                # Não sabemos quando começamos a seguir: registra agora
+                # e trata como recente (não faz unfollow nesta execução).
+                follow_log[username] = now_str
+                stats["too_recent"] += 1
+                continue
+
             try:
                 followed_at = datetime.fromisoformat(date_str)
                 days_ago = (now - followed_at).days
-                if days_ago >= days_threshold:
-                    candidates.append((username, days_ago))
-                else:
-                    stats["too_recent"] += 1
             except (ValueError, TypeError):
-                candidates.append((username, 999))
+                days_ago = 999
+
+            if days_ago < days_threshold:
+                stats["too_recent"] += 1
+                continue
+
+            candidates.append((username, days_ago))
+
+        save_follow_log(follow_log)
 
         self._log(
+            f"  {len(following_norm)} seguindo | "
+            f"{len(followers_norm)} seguidores"
+        )
+        self._log(
+            f"  {stats['follows_back']} seguem de volta (mantidos) | "
+            f"{stats['too_recent']} recentes (mantidos)"
+        )
+        self._log(
             f"  {len(candidates)} candidatos para unfollow "
-            f"({stats['too_recent']} seguidos há menos de "
-            f"{days_threshold} dias)."
+            f"(não te seguem e já passaram de {days_threshold} dias)."
         )
 
+        # ── 5. Executar unfollow ──────────────────────────────────────
         for username, days_ago in candidates:
             if self._stop_requested:
                 break
@@ -974,20 +943,12 @@ class InstagramBot:
             stats["checked"] += 1
             self.on_progress(stats["unfollowed"], len(candidates))
             self._log(
-                f"Verificando @{username} (seguido há {days_ago} dias)..."
-            )
-
-            if self._check_follows_back(username):
-                self._log(f"  @{username}: segue de volta! Mantendo.")
-                stats["follows_back"] += 1
-                continue
-
-            self._log(
-                f"  @{username}: NÃO segue de volta. "
+                f"@{username}: não te segue (seguido há {days_ago} dias). "
                 f"Deixando de seguir..."
             )
             if self._unfollow_user(username):
                 stats["unfollowed"] += 1
+                remove_from_follow_log(username)
                 self._log(
                     f"  [{stats['unfollowed']}] Unfollow @{username}!"
                 )
