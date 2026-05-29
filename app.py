@@ -443,6 +443,8 @@ class App(ctk.CTk):
         self.allowed_user_entry.grid(
             row=1, column=1, padx=12, pady=4, sticky="w"
         )
+        # Pré-preenchido com o perfil de teste (pode alterar livremente).
+        self.allowed_user_entry.insert(0, "leferreira_99")
 
         ctk.CTkLabel(
             config_frame,
@@ -1228,7 +1230,7 @@ class App(ctk.CTk):
 
         def _task():
             try:
-                self._bot.hide_story_from_all_except(
+                self._bot.hide_story_via_settings(
                     allowed_username=allowed,
                     my_username=my_user,
                 )

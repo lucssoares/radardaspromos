@@ -966,7 +966,278 @@ class InstagramBot:
         self._log("=" * 50)
         return stats
 
-    # ── Ocultar stories de todos exceto um perfil ─────────────────────
+    # ── Ocultar stories via tela de configurações ─────────────────────
+
+    def _click_by_text(self, needles: list[str], exact: bool = False) -> str:
+        """Clica no primeiro elemento clicável cujo texto bate com um needle.
+
+        Retorna o texto clicado (ou string vazia se nada foi encontrado).
+        """
+        return self._page.evaluate(
+            """(args) => {
+                const {needles, exact} = args;
+                const sel = 'a,button,[role="button"],[role="link"],'
+                    + '[role="menuitem"],span,div';
+                const els = document.querySelectorAll(sel);
+                for (const el of els) {
+                    const t = (el.innerText || '').trim().toLowerCase();
+                    if (!t) continue;
+                    const ok = exact
+                        ? needles.includes(t)
+                        : needles.some(n => t.includes(n));
+                    if (ok) {
+                        let target = el;
+                        // Sobe até um ancestral clicável, se houver.
+                        for (let i = 0; i < 3 && target; i++) {
+                            const role = target.getAttribute
+                                ? target.getAttribute('role') : null;
+                            if (target.tagName === 'A'
+                                || target.tagName === 'BUTTON'
+                                || role === 'button' || role === 'link'
+                                || role === 'menuitem') {
+                                break;
+                            }
+                            target = target.parentElement;
+                        }
+                        (target || el).click();
+                        return t.slice(0, 60);
+                    }
+                }
+                return '';
+            }""",
+            {"needles": needles, "exact": exact},
+        )
+
+    def _open_hide_story_from_list(self) -> bool:
+        """Navega até a tela 'Ocultar story e transmissão ao vivo de'.
+
+        Segue o fluxo do Instagram web:
+        Configurações → Quem pode ver seu conteúdo →
+        Ocultar story e transmissão ao vivo → ...de.
+        """
+        self._page.goto(
+            "https://www.instagram.com/",
+            wait_until="load",
+            timeout=30000,
+        )
+        self._delay(3, 5)
+
+        # 1. Abrir menu "Mais" (sidebar) e clicar em "Configurações".
+        self._click_by_text(["mais", "more"])
+        self._delay(1.5, 2.5)
+        clicked = self._click_by_text(
+            ["configurações", "configuracoes", "settings"]
+        )
+        self._log(f"  Menu: '{clicked}'")
+        self._delay(2.5, 3.5)
+
+        # 2. "Ocultar story e transmissão ao vivo".
+        clicked = self._click_by_text(["ocultar story", "hide story"])
+        self._log(f"  Configuração: '{clicked}'")
+        self._delay(2, 3)
+
+        # 3. "Ocultar story e transmissão ao vivo de" (abre a lista).
+        self._click_by_text(
+            [
+                "ocultar story e transmissão ao vivo de",
+                "ocultar story e transmissao ao vivo de",
+                "ocultar story de",
+                "hide story and live from",
+                "hide story from",
+            ]
+        )
+        self._delay(2.5, 3.5)
+
+        # Verifica se a lista de pessoas apareceu (campo de busca/linhas).
+        return self._page.evaluate(
+            """() => {
+                const txt = (document.body.innerText || '').toLowerCase();
+                const hasSearch = !!document.querySelector(
+                    "input[placeholder*='Pesquis'], "
+                    + "input[placeholder*='Search'], "
+                    + "input[aria-label*='Pesquis'], "
+                    + "input[aria-label*='Search']"
+                );
+                return hasSearch
+                    || txt.includes('ocultar story e transmiss')
+                    || txt.includes('hide story and live');
+            }"""
+        )
+
+    def _process_hide_story_rows(self, allowed: str) -> dict:
+        """Marca/desmarca pessoas na lista de 'Ocultar story de'.
+
+        Seleciona (oculta) todos exceto o perfil permitido. Desmarca o
+        perfil permitido se estiver selecionado. Roda em JavaScript sobre
+        as linhas atualmente renderizadas.
+        """
+        return self._page.evaluate(
+            """(allowed) => {
+                const out = {selected: 0, kept: 0, unselected_allowed: 0,
+                             rows: 0, sample: ''};
+                // Linhas: elementos que contêm um link de perfil OU um
+                // checkbox/circle de seleção.
+                const anchors = Array.from(
+                    document.querySelectorAll('a[href^="/"][role], a[href^="/"]')
+                );
+                const seen = new Set();
+                for (const a of anchors) {
+                    const href = a.getAttribute('href') || '';
+                    const m = href.match(/^\\/([A-Za-z0-9._]+)\\/?$/);
+                    if (!m) continue;
+                    const username = m[1].toLowerCase();
+                    if (seen.has(username)) continue;
+                    seen.add(username);
+
+                    // Sobe até a linha (ancestral com um botão/checkbox).
+                    let row = a;
+                    for (let i = 0; i < 6 && row; i++) {
+                        if (row.querySelector(
+                            'button, [role="button"], [role="checkbox"], '
+                            + 'svg[aria-label]')) {
+                            break;
+                        }
+                        row = row.parentElement;
+                    }
+                    if (!row) continue;
+                    out.rows++;
+                    if (!out.sample) {
+                        out.sample = (row.innerText || '').slice(0, 40)
+                            + ' :: ' + row.outerHTML.slice(0, 180);
+                    }
+
+                    // Detecta estado de seleção pelo aria-label do ícone.
+                    const labelled = row.querySelector('[aria-label]');
+                    const lbl = labelled
+                        ? (labelled.getAttribute('aria-label') || '')
+                            .toLowerCase()
+                        : '';
+                    const isSelected = lbl.includes('selecionad')
+                        || lbl.includes('selected')
+                        || lbl.includes('marcad')
+                        || row.querySelector('[aria-checked="true"]') !== null;
+
+                    const toggle = row.querySelector(
+                        'button, [role="button"], [role="checkbox"]'
+                    ) || row;
+
+                    if (username === allowed) {
+                        if (isSelected) {
+                            toggle.click();
+                            out.unselected_allowed++;
+                        } else {
+                            out.kept++;
+                        }
+                    } else {
+                        if (!isSelected) {
+                            toggle.click();
+                            out.selected++;
+                        } else {
+                            out.kept++;
+                        }
+                    }
+                }
+                return out;
+            }""",
+            allowed,
+        )
+
+    def _scroll_hide_story_list(self) -> None:
+        """Rola a lista de pessoas da tela de ocultar story."""
+        self._page.evaluate(
+            """() => {
+                const dlg = document.querySelector("div[role='dialog']")
+                    || document.body;
+                let sc = null;
+                const all = dlg.querySelectorAll('div');
+                for (const d of all) {
+                    const st = getComputedStyle(d);
+                    if ((st.overflowY === 'auto' || st.overflowY === 'scroll')
+                        && d.scrollHeight > d.clientHeight + 50) {
+                        sc = d; break;
+                    }
+                }
+                if (sc) {
+                    sc.scrollTop = sc.scrollHeight;
+                } else {
+                    window.scrollBy(0, 800);
+                }
+            }"""
+        )
+
+    def hide_story_via_settings(
+        self, allowed_username: str, my_username: str = ""
+    ) -> dict:
+        """Oculta stories via tela de configurações (todos exceto um).
+
+        Tenta usar a tela nativa 'Ocultar story e transmissão ao vivo de'.
+        Se não conseguir navegar até ela, faz fallback para o método
+        perfil-a-perfil.
+        """
+        stats = {"hidden": 0, "kept": 0, "errors": 0, "rows": 0}
+        allowed = allowed_username.lower().strip().lstrip("@").strip("/")
+        self._stop_requested = False
+        self._log(
+            f"Abrindo configurações de 'Ocultar story' (exceto @{allowed})..."
+        )
+
+        try:
+            opened = self._open_hide_story_from_list()
+        except Exception as exc:
+            self._log(f"Erro ao abrir configurações: {exc}")
+            opened = False
+
+        if not opened:
+            self._log(
+                "Não consegui abrir a tela de configurações. "
+                "Usando método perfil-a-perfil como alternativa..."
+            )
+            return self.hide_story_from_all_except(
+                allowed_username=allowed, my_username=my_username
+            )
+
+        self._log("Tela de seleção aberta. Marcando perfis...")
+        self._delay(1, 2)
+
+        stale = 0
+        total_selected = 0
+        first_dump = True
+        while stale < 6 and not self._stop_requested:
+            res = self._process_hide_story_rows(allowed)
+            stats["rows"] = max(stats["rows"], res.get("rows", 0))
+
+            if first_dump and res.get("sample"):
+                self._log(f"  [debug linha] {res['sample']}")
+                first_dump = False
+
+            newly = res.get("selected", 0)
+            total_selected += newly
+            if res.get("unselected_allowed"):
+                self._log(f"  @{allowed} desmarcado (poderá ver os stories).")
+
+            if newly == 0:
+                stale += 1
+            else:
+                stale = 0
+                self._log(f"  {total_selected} perfis marcados para ocultar...")
+
+            self._scroll_hide_story_list()
+            self._delay(1.5, 2.5)
+
+        stats["hidden"] = total_selected
+        self._log("=" * 50)
+        self._log("Configuração concluída!")
+        self._log(f"  Marcados para ocultar: {stats['hidden']}")
+        self._log(f"  Linhas vistas: {stats['rows']}")
+        if stats["hidden"] == 0:
+            self._log(
+                "Nenhum perfil foi marcado. Pode ser que os seletores "
+                "precisem de ajuste — me envie o '[debug linha]' acima."
+            )
+        self._log("=" * 50)
+        return stats
+
+    # ── Ocultar stories de todos exceto um perfil (perfil-a-perfil) ────
 
     def _hide_story_from_user(self, username: str) -> bool:
         """Visita o perfil e clica em '...' → 'Ocultar seu story'.
