@@ -1056,16 +1056,19 @@ class InstagramBot:
         self._page.goto(dest, wait_until="load", timeout=30000)
         self._delay(3, 5)
 
-        # 2. Clicar em "Mais" (botão da barra lateral). Tenta por texto e,
-        #    se não achar, pelo ícone (svg aria-label).
-        clicked = self._click_by_text(["mais", "more"], exact=True)
+        # 2. Abrir o menu: clicar em "Configurações" (ou "Mais"/ícone).
+        clicked = self._click_by_text(
+            ["configurações", "configuracoes", "mais", "more", "settings"],
+            exact=True,
+        )
         if not clicked:
             self._click_options_menu()
         else:
             self._log(f"  Abrindo: '{clicked}'")
         self._delay(1.5, 2.5)
 
-        # 3. "Configurações" / "Configurações e privacidade".
+        # 3. Dentro do menu, clicar em "Configurações"
+        #    (ou "Configurações e privacidade").
         clicked = self._click_by_text(
             [
                 "configurações e privacidade",
