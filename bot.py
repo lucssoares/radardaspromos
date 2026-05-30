@@ -1008,40 +1008,84 @@ class InstagramBot:
             {"needles": needles, "exact": exact},
         )
 
-    def _open_hide_story_from_list(self) -> bool:
+    def _click_options_menu(self) -> None:
+        """Abre o menu 'Opções' (engrenagem/hambúrguer) no perfil/sidebar."""
+        clicked = self._page.evaluate(
+            """() => {
+                // Procura ícones de opções/configurações por aria-label.
+                const labels = ['opções', 'opcoes', 'options',
+                    'configurações', 'configuracoes', 'settings', 'mais',
+                    'more'];
+                const svgs = document.querySelectorAll('svg[aria-label]');
+                for (const s of svgs) {
+                    const l = (s.getAttribute('aria-label') || '')
+                        .toLowerCase();
+                    if (labels.some(x => l.includes(x))) {
+                        let t = s;
+                        for (let i = 0; i < 4 && t; i++) {
+                            const role = t.getAttribute
+                                ? t.getAttribute('role') : null;
+                            if (t.tagName === 'BUTTON' || t.tagName === 'A'
+                                || role === 'button' || role === 'link') {
+                                break;
+                            }
+                            t = t.parentElement;
+                        }
+                        (t || s).click();
+                        return l;
+                    }
+                }
+                return '';
+            }"""
+        )
+        if clicked:
+            self._log(f"  Abrindo menu: '{clicked}'")
+
+    def _open_hide_story_from_list(self, my_user: str = "") -> bool:
         """Navega até a tela 'Ocultar story e transmissão ao vivo de'.
 
-        Segue o fluxo do Instagram web:
-        Configurações → Quem pode ver seu conteúdo →
+        Segue o caminho do Instagram web:
+        Perfil → Opções → Configurações e privacidade →
         Ocultar story e transmissão ao vivo → ...de.
         """
-        self._page.goto(
-            "https://www.instagram.com/",
-            wait_until="load",
-            timeout=30000,
+        # 1. Ir para o próprio perfil (ou home se não tiver o @).
+        dest = (
+            f"https://www.instagram.com/{my_user}/"
+            if my_user else "https://www.instagram.com/"
         )
+        self._page.goto(dest, wait_until="load", timeout=30000)
         self._delay(3, 5)
 
-        # 1. Abrir menu "Mais" (sidebar) e clicar em "Configurações".
-        self._click_by_text(["mais", "more"])
+        # 2. Abrir "Opções" (engrenagem do perfil ou "Mais" da sidebar).
+        self._click_options_menu()
         self._delay(1.5, 2.5)
+
+        # 3. "Configurações e privacidade" / "Configurações".
         clicked = self._click_by_text(
-            ["configurações", "configuracoes", "settings"]
+            [
+                "configurações e privacidade",
+                "configuracoes e privacidade",
+                "settings and privacy",
+                "configurações",
+                "configuracoes",
+                "settings",
+            ]
         )
         self._log(f"  Menu: '{clicked}'")
         self._delay(2.5, 3.5)
 
-        # 2. "Ocultar story e transmissão ao vivo".
+        # 4. "Ocultar story e transmissão ao vivo".
         clicked = self._click_by_text(["ocultar story", "hide story"])
         self._log(f"  Configuração: '{clicked}'")
         self._delay(2, 3)
 
-        # 3. "Ocultar story e transmissão ao vivo de" (abre a lista).
+        # 5. "Ocultar story e transmissão ao vivo de" (abre a lista).
         self._click_by_text(
             [
                 "ocultar story e transmissão ao vivo de",
                 "ocultar story e transmissao ao vivo de",
                 "ocultar story de",
+                "ocultar story e live de",
                 "hide story and live from",
                 "hide story from",
             ]
@@ -1170,31 +1214,32 @@ class InstagramBot:
     ) -> dict:
         """Oculta stories via tela de configurações (todos exceto um).
 
-        Tenta usar a tela nativa 'Ocultar story e transmissão ao vivo de'.
-        Se não conseguir navegar até ela, faz fallback para o método
-        perfil-a-perfil.
+        Usa SOMENTE a tela nativa 'Ocultar story e transmissão ao vivo de'
+        (Perfil → Opções → Configurações → Ocultar story → ...de).
+        Não visita perfil por perfil.
         """
         stats = {"hidden": 0, "kept": 0, "errors": 0, "rows": 0}
         allowed = allowed_username.lower().strip().lstrip("@").strip("/")
+        my_user = my_username.lower().strip().lstrip("@").strip("/")
         self._stop_requested = False
         self._log(
             f"Abrindo configurações de 'Ocultar story' (exceto @{allowed})..."
         )
 
         try:
-            opened = self._open_hide_story_from_list()
+            opened = self._open_hide_story_from_list(my_user)
         except Exception as exc:
             self._log(f"Erro ao abrir configurações: {exc}")
             opened = False
 
         if not opened:
             self._log(
-                "Não consegui abrir a tela de configurações. "
-                "Usando método perfil-a-perfil como alternativa..."
+                "Não consegui abrir a tela 'Ocultar story de'. "
+                "Verifique se está logado e me envie o que apareceu no log "
+                "acima (os textos de 'Menu'/'Configuração') para eu ajustar "
+                "a navegação."
             )
-            return self.hide_story_from_all_except(
-                allowed_username=allowed, my_username=my_username
-            )
+            return stats
 
         self._log("Tela de seleção aberta. Marcando perfis...")
         self._delay(1, 2)
