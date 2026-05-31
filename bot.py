@@ -1228,7 +1228,9 @@ class InstagramBot:
         return self._page.evaluate(
             """(allowed) => {
                 const out = {selected: 0, kept: 0, unselected_allowed: 0,
-                             rows: 0, sample: '', cbx: 0, mode: ''};
+                             rows: 0, sample: '', cbx: 0, mode: '',
+                             named: 0, no_toggle: 0,
+                             cnt_cb: 0, cnt_ac: 0, cnt_as: 0, cnt_links: 0};
 
                 // GUARD: nunca operar fora da tela de ocultar story.
                 const url = (location.href || '').toLowerCase();
@@ -1245,15 +1247,15 @@ class InstagramBot:
 
                 const RESERVED = new Set([
                     'accounts', 'explore', 'reels', 'direct', 'p', 'stories',
-                    'about', 'reel', 'tv', 'home'
+                    'about', 'reel', 'tv', 'home', 'settings'
                 ]);
-                // Extrai @ do href de um link de perfil (/usuario/).
-                const userFromLink = (a) => {
+                const userFromHref = (href) => {
                     try {
-                        const p = new URL(a.href).pathname
+                        const p = new URL(href, location.href).pathname
                             .replace(/^\\/+|\\/+$/g, '');
                         if (p && p.indexOf('/') === -1
-                            && !RESERVED.has(p)) {
+                            && !RESERVED.has(p)
+                            && /^[a-z0-9._]+$/i.test(p)) {
                             return p.toLowerCase();
                         }
                     } catch (e) {}
@@ -1261,36 +1263,9 @@ class InstagramBot:
                 };
                 const rowText = (el) =>
                     (el && el.innerText ? el.innerText.trim() : '');
-                // Sobe até o menor ancestral com texto de uma linha (a linha
-                // da pessoa: '@usuario' + nome). Não depende de <img>.
-                const rowOf = (el) => {
-                    let r = el;
-                    for (let i = 0; i < 14 && r; i++) {
-                        const t = rowText(r);
-                        if (t.length > 0 && t.length <= 120) return r;
-                        r = r.parentElement;
-                    }
-                    return el.parentElement || el;
-                };
-                // @ da linha: tenta link de perfil; senão, 1ª "palavra"
-                // sem espaços do texto (provável @usuario).
-                const unameOf = (row) => {
-                    const links = Array.from(
-                        row.querySelectorAll('a[href^="/"]')
-                    );
-                    for (const a of links) {
-                        const u = userFromLink(a);
-                        if (u) return u;
-                    }
-                    const lines = rowText(row).split('\\n')
-                        .map(s => s.trim()).filter(Boolean);
-                    for (const ln of lines) {
-                        if (ln && ln.indexOf(' ') === -1) {
-                            return ln.replace(/^@/, '').toLowerCase();
-                        }
-                    }
-                    return (lines[0] || '').replace(/^@/, '').toLowerCase();
-                };
+                const inNav = (el) => !!(el.closest && (el.closest('nav')
+                    || el.closest('[role="navigation"]')
+                    || el.closest('[role="tablist"]')));
                 const isChecked = (el) => {
                     if (!el || !el.getAttribute) return false;
                     if (el.getAttribute('aria-checked') === 'true'
@@ -1301,63 +1276,80 @@ class InstagramBot:
                     return false;
                 };
 
-                // Toggles reais incluem aria-selected (os de pessoa usam
-                // esse atributo). MAS ignoramos os que estão dentro de um
-                // <a> ou de navegação (a aba 'Perfil' é um <a> que levava
-                // para /soareluc/).
-                let raw = Array.from(document.querySelectorAll(
-                    '[role="checkbox"], input[type="checkbox"], '
-                    + '[aria-checked], [aria-selected]'
-                ));
-                let toggles = raw.filter(el => {
-                    if (el.closest && (el.closest('a')
-                        || el.closest('nav')
-                        || el.closest('[role="navigation"]')
-                        || el.closest('[role="tablist"]'))) {
-                        return false;
-                    }
-                    return true;
-                });
-                out.cbx = toggles.length;
+                // Contagens globais (diagnóstico).
+                out.cnt_cb = document.querySelectorAll(
+                    '[role="checkbox"], input[type="checkbox"]').length;
+                out.cnt_ac = document.querySelectorAll('[aria-checked]').length;
+                out.cnt_as = document.querySelectorAll('[aria-selected]').length;
 
-                // Monta itens (linha + @) a partir de cada toggle.
+                // DETECÇÃO PRINCIPAL: cada pessoa é um link de perfil
+                // (/usuario/) na lista do frame direito.
+                const links = Array.from(
+                    document.querySelectorAll('a[href^="/"]'));
+                const persons = [];
                 const seen = new Set();
-                const items = [];
-                for (const cb of toggles) {
-                    const row = rowOf(cb);
-                    if (!row || seen.has(row)) continue;
+                for (const a of links) {
+                    if (inNav(a)) continue;
+                    const u = userFromHref(a.getAttribute('href'));
+                    if (!u) continue;
+                    // Linha = ancestral que tem o link + um toggle ao lado.
+                    let row = a;
+                    let toggle = null;
+                    for (let i = 0; i < 8 && row; i++) {
+                        toggle = row.querySelector(
+                            '[role="checkbox"], input[type="checkbox"], '
+                            + '[aria-checked], [aria-selected]');
+                        if (toggle && !a.contains(toggle)
+                            && !toggle.contains(a)) {
+                            break;
+                        }
+                        // Também aceita um botão à direita que não é o link.
+                        const btn = Array.from(row.querySelectorAll(
+                            'div[role="button"], button')).find(
+                            b => !a.contains(b) && !b.contains(a));
+                        if (btn) { toggle = btn; break; }
+                        toggle = null;
+                        row = row.parentElement;
+                    }
+                    if (!row) row = a.parentElement;
+                    if (seen.has(row)) continue;
                     seen.add(row);
-                    items.push({cb, row, uname: unameOf(row)});
+                    persons.push({uname: u, row, toggle, link: a});
+                }
+                out.cnt_links = persons.length;
+
+                out.rows = persons.length;
+                out.named = persons.filter(p => p.uname).length;
+                out.mode = 'links:' + persons.length;
+                if (persons.length) {
+                    const it = persons[0];
+                    out.sample = it.uname + ' [toggle='
+                        + (it.toggle ? (it.toggle.tagName + '/'
+                            + (it.toggle.getAttribute('role') || '') + '/'
+                            + (it.toggle.getAttribute('aria-checked') || '')
+                            + (it.toggle.getAttribute('aria-selected') || ''))
+                          : 'NENHUM')
+                        + '] :: ' + it.row.outerHTML.slice(0, 320);
                 }
 
-                out.mode = 'checkbox:' + items.length;
-                out.rows = items.length;
-                out.named = items.filter(it => it.uname).length;
-                if (items.length) {
-                    const it = items.find(x => x.uname) || items[0];
-                    out.sample = (it.uname || '(sem @)') + ' :: '
-                        + it.row.outerHTML.slice(0, 200);
-                }
-
-                for (const it of items) {
-                    // Sem @ identificável: não clica (evita abas/nav e
-                    // evita ocultar de quem não conseguimos identificar).
-                    if (!it.uname) { continue; }
-                    const checked = isChecked(it.cb);
-                    // Poupa o permitido por @ exato OU se o texto da linha
-                    // contém o @ (rede de segurança p/ o leferreira_99).
-                    const rt = rowText(it.row).toLowerCase();
+                for (const p of persons) {
+                    const rt = rowText(p.row).toLowerCase();
                     const allow = !!allowed
-                        && (it.uname === allowed || rt.includes(allowed));
+                        && (p.uname === allowed || rt.includes(allowed));
+                    if (!p.toggle) { out.no_toggle++;
+                        if (!allow) { /* não conseguimos marcar */ }
+                        continue;
+                    }
+                    const checked = isChecked(p.toggle);
                     if (allow) {
                         if (checked) {
-                            it.cb.click();
+                            p.toggle.click();
                             out.unselected_allowed++;
                         } else {
                             out.kept++;
                         }
                     } else if (!checked) {
-                        it.cb.click();
+                        p.toggle.click();
                         out.selected++;
                     } else {
                         out.kept++;
@@ -1369,25 +1361,67 @@ class InstagramBot:
         )
 
     def _scroll_hide_story_list(self) -> None:
-        """Rola a lista de pessoas da tela de ocultar story."""
+        """Rola o container da LISTA DE PERFIS (frame direito).
+
+        Procura o elemento rolável que contém links de perfil, em vez de
+        rolar o menu de configurações (frame esquerdo).
+        """
         self._page.evaluate(
             """() => {
-                const dlg = document.querySelector("div[role='dialog']")
-                    || document.body;
+                const RESERVED = new Set([
+                    'accounts', 'explore', 'reels', 'direct', 'p', 'stories',
+                    'about', 'reel', 'tv', 'home', 'settings'
+                ]);
+                const isUserLink = (a) => {
+                    try {
+                        const p = new URL(a.href, location.href).pathname
+                            .replace(/^\\/+|\\/+$/g, '');
+                        return p && p.indexOf('/') === -1
+                            && !RESERVED.has(p)
+                            && /^[a-z0-9._]+$/i.test(p);
+                    } catch (e) { return false; }
+                };
+                // Acha uma linha de perfil e sobe até o container rolável.
+                const link = Array.from(
+                    document.querySelectorAll('a[href^="/"]'))
+                    .find(a => {
+                        if (a.closest('nav')
+                            || a.closest('[role="navigation"]')) return false;
+                        return isUserLink(a);
+                    });
                 let sc = null;
-                const all = dlg.querySelectorAll('div');
-                for (const d of all) {
-                    const st = getComputedStyle(d);
-                    if ((st.overflowY === 'auto' || st.overflowY === 'scroll')
-                        && d.scrollHeight > d.clientHeight + 50) {
-                        sc = d; break;
+                if (link) {
+                    let el = link.parentElement;
+                    for (let i = 0; i < 18 && el; i++) {
+                        const st = getComputedStyle(el);
+                        if ((st.overflowY === 'auto'
+                            || st.overflowY === 'scroll')
+                            && el.scrollHeight > el.clientHeight + 40) {
+                            sc = el; break;
+                        }
+                        el = el.parentElement;
                     }
+                }
+                if (!sc) {
+                    // Fallback: maior container rolável da página.
+                    let best = null, bestH = 0;
+                    for (const d of document.querySelectorAll('div')) {
+                        const st = getComputedStyle(d);
+                        if ((st.overflowY === 'auto'
+                            || st.overflowY === 'scroll')
+                            && d.scrollHeight > d.clientHeight + 40
+                            && d.scrollHeight > bestH) {
+                            best = d; bestH = d.scrollHeight;
+                        }
+                    }
+                    sc = best;
                 }
                 if (sc) {
                     sc.scrollTop = sc.scrollHeight;
-                } else {
-                    window.scrollBy(0, 800);
+                    return true;
                 }
+                window.scrollBy(0, 800);
+                return false;
             }"""
         )
 
@@ -1459,8 +1493,11 @@ class InstagramBot:
             if first_dump:
                 self._log(
                     f"  [debug] modo={res.get('mode')} "
-                    f"checkboxes={res.get('cbx')} linhas={res.get('rows')} "
-                    f"com_@={res.get('named')}"
+                    f"linhas={res.get('rows')} com_@={res.get('named')} "
+                    f"sem_toggle={res.get('no_toggle')} | "
+                    f"checkbox={res.get('cnt_cb')} "
+                    f"aria-checked={res.get('cnt_ac')} "
+                    f"aria-selected={res.get('cnt_as')}"
                 )
                 if res.get("sample"):
                     self._log(f"  [debug linha] {res['sample']}")
