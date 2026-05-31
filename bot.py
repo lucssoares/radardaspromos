@@ -1282,78 +1282,78 @@ class InstagramBot:
                 out.cnt_ac = document.querySelectorAll('[aria-checked]').length;
                 out.cnt_as = document.querySelectorAll('[aria-selected]').length;
 
-                // DETECÇÃO PRINCIPAL: cada pessoa é um link de perfil
-                // (/usuario/) na lista do frame direito.
-                const links = Array.from(
-                    document.querySelectorAll('a[href^="/"]'));
+                // DETECÇÃO: cada pessoa = avatar (img) + nome, e a linha
+                // NÃO é link (linhas com link de perfil = cabeçalho/conta,
+                // como o próprio 'soareluc', que ao clicar navegava p/ home).
+                const noSpaceLine = (row) => {
+                    const lines = rowText(row).split('\\n')
+                        .map(s => s.trim()).filter(Boolean);
+                    for (const ln of lines) {
+                        if (ln && ln.indexOf(' ') === -1) {
+                            return ln.replace(/^@/, '').toLowerCase();
+                        }
+                    }
+                    return (lines[0] || '').replace(/^@/, '').toLowerCase();
+                };
+                const rowOfImg = (img) => {
+                    let r = img;
+                    for (let i = 0; i < 10 && r; i++) {
+                        const t = rowText(r);
+                        if (t.length > 0 && t.length <= 120) return r;
+                        r = r.parentElement;
+                    }
+                    return img.parentElement || img;
+                };
+                const svgLabels = (row) => Array.from(
+                    row.querySelectorAll('svg'))
+                    .map(s => (s.getAttribute('aria-label') || '')
+                        .toLowerCase())
+                    .filter(Boolean);
+                // 'Marcado' costuma virar um check/ícone com aria-label.
+                const rowChecked = (row) => svgLabels(row).some(
+                    l => /selec|marc|check|tick|ativ|remov|adicionad/.test(l));
+
+                const imgs = Array.from(document.querySelectorAll('img'));
                 const persons = [];
                 const seen = new Set();
-                for (const a of links) {
-                    if (inNav(a)) continue;
-                    const u = userFromHref(a.getAttribute('href'));
-                    if (!u) continue;
-                    // Linha = ancestral que tem o link + um toggle ao lado.
-                    let row = a;
-                    let toggle = null;
-                    for (let i = 0; i < 8 && row; i++) {
-                        toggle = row.querySelector(
-                            '[role="checkbox"], input[type="checkbox"], '
-                            + '[aria-checked], [aria-selected]');
-                        if (toggle && !a.contains(toggle)
-                            && !toggle.contains(a)) {
-                            break;
-                        }
-                        // Também aceita um botão à direita que não é o link.
-                        const btn = Array.from(row.querySelectorAll(
-                            'div[role="button"], button')).find(
-                            b => !a.contains(b) && !b.contains(a));
-                        if (btn) { toggle = btn; break; }
-                        toggle = null;
-                        row = row.parentElement;
+                for (const img of imgs) {
+                    const row = rowOfImg(img);
+                    if (!row || seen.has(row)) continue;
+                    if (inNav(row) || (row.closest && row.closest('a'))) {
+                        continue;
                     }
-                    if (!row) row = a.parentElement;
-                    if (seen.has(row)) continue;
+                    // Pular linhas que contêm link de perfil (conta/cabeçalho).
+                    const lk = row.querySelector('a[href^="/"]');
+                    if (lk && userFromHref(lk.getAttribute('href'))) continue;
+                    const uname = noSpaceLine(row);
+                    if (!uname) continue;
                     seen.add(row);
-                    persons.push({uname: u, row, toggle, link: a});
+                    persons.push({uname, row});
                 }
-                out.cnt_links = persons.length;
 
                 out.rows = persons.length;
                 out.named = persons.filter(p => p.uname).length;
-                out.mode = 'links:' + persons.length;
+                out.mode = 'avatar:' + persons.length;
                 if (persons.length) {
                     const it = persons[0];
-                    out.sample = it.uname + ' [toggle='
-                        + (it.toggle ? (it.toggle.tagName + '/'
-                            + (it.toggle.getAttribute('role') || '') + '/'
-                            + (it.toggle.getAttribute('aria-checked') || '')
-                            + (it.toggle.getAttribute('aria-selected') || ''))
-                          : 'NENHUM')
-                        + '] :: ' + it.row.outerHTML.slice(0, 320);
+                    out.sample = it.uname
+                        + ' svg=[' + svgLabels(it.row).join('|') + ']'
+                        + ' btns=' + it.row.querySelectorAll(
+                            'div[role="button"], button').length
+                        + ' :: ' + it.row.outerHTML.slice(0, 500);
                 }
 
                 for (const p of persons) {
                     const rt = rowText(p.row).toLowerCase();
                     const allow = !!allowed
                         && (p.uname === allowed || rt.includes(allowed));
-                    if (!p.toggle) { out.no_toggle++;
-                        if (!allow) { /* não conseguimos marcar */ }
-                        continue;
-                    }
-                    const checked = isChecked(p.toggle);
+                    const checked = rowChecked(p.row);
                     if (allow) {
-                        if (checked) {
-                            p.toggle.click();
-                            out.unselected_allowed++;
-                        } else {
-                            out.kept++;
-                        }
-                    } else if (!checked) {
-                        p.toggle.click();
-                        out.selected++;
-                    } else {
-                        out.kept++;
-                    }
+                        if (checked) { p.row.click();
+                            out.unselected_allowed++; }
+                        else { out.kept++; }
+                    } else if (!checked) { p.row.click(); out.selected++; }
+                    else { out.kept++; }
                 }
                 return out;
             }""",
