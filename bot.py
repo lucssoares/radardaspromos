@@ -1243,89 +1243,109 @@ class InstagramBot:
                     return out;
                 }
 
-                const firstLine = (el) => {
-                    const lines = (el.innerText || '').split('\\n')
-                        .map(s => s.trim()).filter(Boolean);
-                    return (lines[0] || '').toLowerCase();
+                const RESERVED = new Set([
+                    'accounts', 'explore', 'reels', 'direct', 'p', 'stories',
+                    'about', 'reel', 'tv', 'home'
+                ]);
+                // Extrai @ do href de um link de perfil (/usuario/).
+                const userFromLink = (a) => {
+                    try {
+                        const p = new URL(a.href).pathname
+                            .replace(/^\\/+|\\/+$/g, '');
+                        if (p && p.indexOf('/') === -1
+                            && !RESERVED.has(p)) {
+                            return p.toLowerCase();
+                        }
+                    } catch (e) {}
+                    return '';
                 };
+                const rowText = (el) =>
+                    (el && el.innerText ? el.innerText.trim() : '');
+                // Sobe até o menor ancestral com texto de uma linha (a linha
+                // da pessoa: '@usuario' + nome). Não depende de <img>.
                 const rowOf = (el) => {
                     let r = el;
-                    for (let i = 0; i < 8 && r; i++) {
-                        if (r.querySelector && r.querySelector('img')
-                            && (r.innerText || '').trim()) {
-                            return r;
-                        }
+                    for (let i = 0; i < 14 && r; i++) {
+                        const t = rowText(r);
+                        if (t.length > 0 && t.length <= 120) return r;
                         r = r.parentElement;
                     }
                     return el.parentElement || el;
                 };
+                // @ da linha: tenta link de perfil; senão, 1ª "palavra"
+                // sem espaços do texto (provável @usuario).
+                const unameOf = (row) => {
+                    const links = Array.from(
+                        row.querySelectorAll('a[href^="/"]')
+                    );
+                    for (const a of links) {
+                        const u = userFromLink(a);
+                        if (u) return u;
+                    }
+                    const lines = rowText(row).split('\\n')
+                        .map(s => s.trim()).filter(Boolean);
+                    for (const ln of lines) {
+                        if (ln && ln.indexOf(' ') === -1) {
+                            return ln.replace(/^@/, '').toLowerCase();
+                        }
+                    }
+                    return (lines[0] || '').replace(/^@/, '').toLowerCase();
+                };
                 const isChecked = (el) => {
-                    const c = el.getAttribute('aria-checked');
-                    const s = el.getAttribute('aria-selected');
-                    return c === 'true' || s === 'true';
+                    if (!el) return false;
+                    if (el.getAttribute
+                        && el.getAttribute('aria-checked') === 'true') {
+                        return true;
+                    }
+                    if (el.tagName === 'INPUT') return !!el.checked;
+                    return false;
                 };
 
-                // 1) Preferir checkboxes/toggles explícitos.
+                // Checkboxes REAIS (sem aria-selected, que pega abas do
+                // menu lateral como 'Perfil' -> navegava para /soareluc/).
                 let toggles = Array.from(document.querySelectorAll(
-                    '[role="checkbox"], [aria-checked], [aria-selected]'
+                    '[role="checkbox"], input[type="checkbox"], [aria-checked]'
                 ));
                 out.cbx = toggles.length;
-                out.mode = toggles.length ? 'checkbox' : 'none';
 
-                // 2) Sem checkboxes: usar linhas com avatar (img) + botão.
-                if (toggles.length === 0) {
-                    const imgs = Array.from(document.querySelectorAll('img'));
-                    const rows = [];
-                    const seen = new Set();
-                    for (const img of imgs) {
-                        const row = rowOf(img);
-                        if (!row || seen.has(row)) continue;
-                        seen.add(row);
-                        if (firstLine(row)) rows.push(row);
-                    }
-                    out.mode = 'rows:' + rows.length;
-                    for (const row of rows) {
-                        out.rows++;
-                        const uname = firstLine(row);
-                        if (!out.sample) {
-                            out.sample = uname + ' :: '
-                                + row.outerHTML.slice(0, 220);
-                        }
-                        const btn = row.querySelector(
-                            '[role="checkbox"], button, [role="button"]'
-                        ) || row;
-                        const checked = isChecked(btn) || isChecked(row);
-                        const allow = uname === allowed
-                            || uname.includes(allowed);
-                        if (allow) {
-                            if (checked) { btn.click();
-                                out.unselected_allowed++; }
-                            else { out.kept++; }
-                        } else if (!checked) { btn.click(); out.selected++; }
-                        else { out.kept++; }
-                    }
-                    return out;
-                }
-
-                // Modo checkbox.
+                // Monta itens (linha + @) a partir de cada checkbox.
                 const seen = new Set();
+                const items = [];
                 for (const cb of toggles) {
                     const row = rowOf(cb);
                     if (!row || seen.has(row)) continue;
                     seen.add(row);
-                    out.rows++;
-                    const uname = firstLine(row);
-                    if (!out.sample) {
-                        out.sample = uname + ' :: '
-                            + row.outerHTML.slice(0, 220);
-                    }
-                    const checked = isChecked(cb);
-                    const allow = uname === allowed || uname.includes(allowed);
+                    items.push({cb, row, uname: unameOf(row)});
+                }
+
+                out.mode = 'checkbox:' + items.length;
+                out.rows = items.length;
+                out.named = items.filter(it => it.uname).length;
+                if (items.length) {
+                    const it = items.find(x => x.uname) || items[0];
+                    out.sample = (it.uname || '(sem @)') + ' :: '
+                        + it.row.outerHTML.slice(0, 200);
+                }
+
+                for (const it of items) {
+                    // Sem @ identificável: não clica (evita abas/nav e
+                    // evita ocultar de quem não conseguimos identificar).
+                    if (!it.uname) { continue; }
+                    const checked = isChecked(it.cb);
+                    const allow = it.uname === allowed;
                     if (allow) {
-                        if (checked) { cb.click(); out.unselected_allowed++; }
-                        else { out.kept++; }
-                    } else if (!checked) { cb.click(); out.selected++; }
-                    else { out.kept++; }
+                        if (checked) {
+                            it.cb.click();
+                            out.unselected_allowed++;
+                        } else {
+                            out.kept++;
+                        }
+                    } else if (!checked) {
+                        it.cb.click();
+                        out.selected++;
+                    } else {
+                        out.kept++;
+                    }
                 }
                 return out;
             }""",
@@ -1423,7 +1443,8 @@ class InstagramBot:
             if first_dump:
                 self._log(
                     f"  [debug] modo={res.get('mode')} "
-                    f"checkboxes={res.get('cbx')} linhas={res.get('rows')}"
+                    f"checkboxes={res.get('cbx')} linhas={res.get('rows')} "
+                    f"com_@={res.get('named')}"
                 )
                 if res.get("sample"):
                     self._log(f"  [debug linha] {res['sample']}")
