@@ -101,8 +101,12 @@ python app.py
 ## Gerar executável (.exe)
 
 ```bash
-pyinstaller --onefile --windowed --name "InstaFollowBot" --collect-all customtkinter app.py
+pyinstaller --onefile --windowed --name "InstaFollowBot" --collect-all customtkinter --add-data "assets;assets" app.py
 ```
+
+> No Windows o separador de `--add-data` é `;` (ponto e vírgula), como acima.
+> No Linux/macOS use `:` → `--add-data "assets:assets"`.
+> O `--add-data` embute a imagem de fundo dos stories (`assets/story_bg.jpg`).
 
 O executável será gerado na pasta `dist/`.
 

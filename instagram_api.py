@@ -7,8 +7,10 @@ Suporta publicação de stories via API.
 """
 
 import json
+import mimetypes
 import os
 import time
+import uuid
 from datetime import datetime
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -47,6 +49,96 @@ def clear_token_data() -> None:
     """Remove o arquivo de token salvo."""
     if os.path.isfile(TOKEN_FILE):
         os.remove(TOKEN_FILE)
+
+
+# ── Upload de imagem para URL pública ────────────────────────────────────
+
+def _multipart_upload(local_path: str, url: str, field: str) -> bytes:
+    """Faz um POST multipart/form-data de um arquivo. Retorna o corpo."""
+    boundary = "----wb" + uuid.uuid4().hex
+    filename = os.path.basename(local_path)
+    ctype = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+    with open(local_path, "rb") as f:
+        file_bytes = f.read()
+    body = b""
+    body += ("--" + boundary + "\r\n").encode()
+    body += (
+        'Content-Disposition: form-data; name="%s"; filename="%s"\r\n'
+        % (field, filename)
+    ).encode()
+    body += ("Content-Type: %s\r\n\r\n" % ctype).encode()
+    body += file_bytes + b"\r\n"
+    body += ("--" + boundary + "--\r\n").encode()
+    req = Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    with urlopen(req, timeout=90) as resp:
+        return resp.read()
+
+
+def upload_image_public(local_path: str) -> str:
+    """Sobe uma imagem local para um host público e retorna a URL direta.
+
+    A Graph API do Instagram exige uma URL pública para publicar. Usa o
+    tmpfiles.org (com fallback para litterbox/catbox). O link fica
+    disponível tempo suficiente para o Instagram baixar a imagem.
+    """
+    if not os.path.isfile(local_path):
+        raise FileNotFoundError(f"Imagem não encontrada: {local_path}")
+
+    # 1) tmpfiles.org → retorna JSON com a URL da página; converte p/ /dl/.
+    try:
+        raw = _multipart_upload(
+            local_path, "https://tmpfiles.org/api/v1/upload", "file"
+        )
+        data = json.loads(raw.decode("utf-8"))
+        page_url = data.get("data", {}).get("url", "")
+        if page_url:
+            return page_url.replace(
+                "tmpfiles.org/", "tmpfiles.org/dl/", 1
+            )
+    except Exception:
+        pass
+
+    # 2) Fallback: litterbox (catbox temporário) → retorna a URL direta.
+    boundary = "----wb" + uuid.uuid4().hex
+    filename = os.path.basename(local_path)
+    ctype = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+    with open(local_path, "rb") as f:
+        file_bytes = f.read()
+    body = b""
+    for name, value in (("reqtype", "fileupload"), ("time", "1h")):
+        body += ("--" + boundary + "\r\n").encode()
+        body += (
+            'Content-Disposition: form-data; name="%s"\r\n\r\n' % name
+        ).encode()
+        body += (value + "\r\n").encode()
+    body += ("--" + boundary + "\r\n").encode()
+    body += (
+        'Content-Disposition: form-data; name="fileToUpload"; '
+        'filename="%s"\r\n' % filename
+    ).encode()
+    body += ("Content-Type: %s\r\n\r\n" % ctype).encode()
+    body += file_bytes + b"\r\n"
+    body += ("--" + boundary + "--\r\n").encode()
+    req = Request(
+        "https://litterbox.catbox.moe/resources/internals/api.php",
+        data=body,
+        headers={
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    with urlopen(req, timeout=90) as resp:
+        link = resp.read().decode("utf-8").strip()
+    if link.startswith("http"):
+        return link
+    raise RuntimeError(f"Falha ao subir imagem para host público: {link}")
 
 
 class InstagramAPI:
@@ -355,6 +447,15 @@ class InstagramAPI:
             raise RuntimeError(f"Falha ao publicar story: {result}")
 
         return result
+
+    def publish_story_image(self, local_path: str) -> dict:
+        """Sobe uma imagem local p/ URL pública e publica como story.
+
+        Útil para publicar uma imagem fixa (ex.: fundo do Radar das
+        Promos) em tela cheia, sem depender de um produto.
+        """
+        public_url = upload_image_public(local_path)
+        return self.publish_story(public_url)
 
     def publish_feed_post(
         self, image_url: str, caption: str = ""

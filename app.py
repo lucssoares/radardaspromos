@@ -6,7 +6,9 @@ Usa CDP para conectar ao Chrome real do usuário.
 Inclui dashboard de métricas via Instagram Graph API.
 """
 
+import os
 import queue
+import sys
 import threading
 import time as _time
 
@@ -31,6 +33,16 @@ from mercadolivre import (
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+
+def resource_path(rel_path: str) -> str:
+    """Resolve o caminho de um recurso (funciona no .exe do PyInstaller)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel_path)
+
+
+# Fundo padrão usado nos stories (Radar das Promos).
+STORY_BG_PATH = resource_path(os.path.join("assets", "story_bg.jpg"))
 
 
 class App(ctk.CTk):
@@ -662,6 +674,18 @@ class App(ctk.CTk):
             hover_color="#C2185B",
         )
         self.post_selected_btn.pack(side="left", padx=(0, 6))
+
+        self.post_story_bg_btn = ctk.CTkButton(
+            btn_frame,
+            text="Postar Story (Fundo)",
+            command=self._on_post_story_bg,
+            width=160,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#9C27B0",
+            hover_color="#7B1FA2",
+        )
+        self.post_story_bg_btn.pack(side="left", padx=(0, 6))
 
         self.auto_post_btn = ctk.CTkButton(
             btn_frame,
@@ -1520,6 +1544,39 @@ class App(ctk.CTk):
         except Exception as exc:
             self._safe_offers_log(f"Erro ao postar: {exc}")
             return False
+
+    def _on_post_story_bg(self) -> None:
+        """Publica apenas o fundo do Radar das Promos como story (tela cheia)."""
+        if not self._api:
+            self._append_offers_log(
+                "API não conectada! Configure o token na aba Dashboard."
+            )
+            return
+
+        if not os.path.isfile(STORY_BG_PATH):
+            self._append_offers_log(
+                f"Imagem de fundo não encontrada: {STORY_BG_PATH}"
+            )
+            return
+
+        self.post_story_bg_btn.configure(state="disabled")
+
+        def _post():
+            try:
+                self._safe_offers_log("Publicando story (fundo)...")
+                result = self._api.publish_story_image(STORY_BG_PATH)
+                self._safe_offers_log(
+                    f"Story publicado! ID: {result.get('id', '')}"
+                )
+            except Exception as exc:
+                self._safe_offers_log(f"Erro ao publicar story: {exc}")
+            finally:
+                self.after(
+                    0,
+                    lambda: self.post_story_bg_btn.configure(state="normal"),
+                )
+
+        threading.Thread(target=_post, daemon=True).start()
 
     def _on_post_selected(self) -> None:
         """Posta o produto selecionado no Instagram."""
