@@ -1084,14 +1084,55 @@ class InstagramBot:
         if clicked:
             self._log(f"  Abrindo menu: '{clicked}'")
 
-    def _open_hide_story_from_list(self, my_user: str = "") -> bool:
-        """Navega até a tela 'Ocultar story e transmissão ao vivo de'.
+    HIDE_STORY_URL = (
+        "https://www.instagram.com/accounts/hide_story_and_live_from/"
+    )
 
-        Segue o caminho do Instagram web:
-        Perfil → Opções → Configurações e privacidade →
-        Ocultar story e transmissão ao vivo → ...de.
+    def _is_on_hide_story_list(self) -> bool:
+        """Verifica se a lista de pessoas (ocultar story) está na tela."""
+        return self._page.evaluate(
+            """() => {
+                const txt = (document.body.innerText || '').toLowerCase();
+                const hasSearch = !!document.querySelector(
+                    "input[placeholder*='Pesquis'], "
+                    + "input[placeholder*='Search'], "
+                    + "input[aria-label*='Pesquis'], "
+                    + "input[aria-label*='Search']"
+                );
+                // Alguma linha com link de perfil dentro do conteúdo?
+                const hasRow = !!document.querySelector(
+                    "a[href^='/'][role='link']"
+                );
+                return hasSearch
+                    || txt.includes('ocultar story e transmiss')
+                    || txt.includes('hide story and live')
+                    || (txt.includes('ocultar') && hasRow);
+            }"""
+        )
+
+    def _open_hide_story_from_list(self, my_user: str = "") -> bool:
+        """Abre a tela 'Ocultar story e transmissão ao vivo de'.
+
+        Vai DIRETO no link de configurações
+        (/accounts/hide_story_and_live_from/). Se por algum motivo não
+        abrir a lista, faz fallback pelo caminho de menus.
         """
-        # 1. Ir para o próprio perfil (ou home se não tiver o @).
+        # 1. Tentar o link direto (forma mais confiável).
+        try:
+            self._page.goto(
+                self.HIDE_STORY_URL, wait_until="load", timeout=30000
+            )
+            self._delay(3, 5)
+            if self._is_on_hide_story_list():
+                self._log("  Tela 'Ocultar story de' aberta (link direto).")
+                return True
+            self._log(
+                "  Link direto não mostrou a lista; tentando pelos menus..."
+            )
+        except Exception as exc:
+            self._log(f"  Link direto falhou ({exc}); tentando menus...")
+
+        # 2. Fallback: Perfil → Mais → Configurações → Ocultar story → ...de.
         dest = (
             f"https://www.instagram.com/{my_user}/"
             if my_user else "https://www.instagram.com/"
@@ -1099,7 +1140,6 @@ class InstagramBot:
         self._page.goto(dest, wait_until="load", timeout=30000)
         self._delay(3, 5)
 
-        # 2. Abrir o menu: clicar em "Configurações" (ou "Mais"/ícone).
         clicked = self._click_by_text(
             ["configurações", "configuracoes", "mais", "more", "settings"],
             exact=True,
@@ -1110,8 +1150,6 @@ class InstagramBot:
             self._log(f"  Abrindo: '{clicked}'")
         self._delay(1.5, 2.5)
 
-        # 3. Dentro do menu, clicar em "Configurações"
-        #    (item exato do menu, não o container).
         clicked = self._click_by_text(
             [
                 "configurações",
@@ -1126,12 +1164,10 @@ class InstagramBot:
         self._log(f"  Menu: '{clicked}'")
         self._delay(2.5, 3.5)
 
-        # 4. "Ocultar story e transmissão ao vivo".
         clicked = self._click_by_text(["ocultar story", "hide story"])
         self._log(f"  Configuração: '{clicked}'")
         self._delay(2, 3)
 
-        # 5. "Ocultar story e transmissão ao vivo de" (abre a lista).
         self._click_by_text(
             [
                 "ocultar story e transmissão ao vivo de",
@@ -1144,21 +1180,7 @@ class InstagramBot:
         )
         self._delay(2.5, 3.5)
 
-        # Verifica se a lista de pessoas apareceu (campo de busca/linhas).
-        return self._page.evaluate(
-            """() => {
-                const txt = (document.body.innerText || '').toLowerCase();
-                const hasSearch = !!document.querySelector(
-                    "input[placeholder*='Pesquis'], "
-                    + "input[placeholder*='Search'], "
-                    + "input[aria-label*='Pesquis'], "
-                    + "input[aria-label*='Search']"
-                );
-                return hasSearch
-                    || txt.includes('ocultar story e transmiss')
-                    || txt.includes('hide story and live');
-            }"""
-        )
+        return self._is_on_hide_story_list()
 
     def _process_hide_story_rows(self, allowed: str) -> dict:
         """Marca/desmarca pessoas na lista de 'Ocultar story de'.
@@ -1170,68 +1192,91 @@ class InstagramBot:
         return self._page.evaluate(
             """(allowed) => {
                 const out = {selected: 0, kept: 0, unselected_allowed: 0,
-                             rows: 0, sample: ''};
-                // Linhas: elementos que contêm um link de perfil OU um
-                // checkbox/circle de seleção.
-                const anchors = Array.from(
-                    document.querySelectorAll('a[href^="/"][role], a[href^="/"]')
-                );
+                             rows: 0, sample: '', cbx: 0, mode: ''};
+
+                const firstLine = (el) => {
+                    const lines = (el.innerText || '').split('\\n')
+                        .map(s => s.trim()).filter(Boolean);
+                    return (lines[0] || '').toLowerCase();
+                };
+                const rowOf = (el) => {
+                    let r = el;
+                    for (let i = 0; i < 8 && r; i++) {
+                        if (r.querySelector && r.querySelector('img')
+                            && (r.innerText || '').trim()) {
+                            return r;
+                        }
+                        r = r.parentElement;
+                    }
+                    return el.parentElement || el;
+                };
+                const isChecked = (el) => {
+                    const c = el.getAttribute('aria-checked');
+                    const s = el.getAttribute('aria-selected');
+                    return c === 'true' || s === 'true';
+                };
+
+                // 1) Preferir checkboxes/toggles explícitos.
+                let toggles = Array.from(document.querySelectorAll(
+                    '[role="checkbox"], [aria-checked], [aria-selected]'
+                ));
+                out.cbx = toggles.length;
+                out.mode = toggles.length ? 'checkbox' : 'none';
+
+                // 2) Sem checkboxes: usar linhas com avatar (img) + botão.
+                if (toggles.length === 0) {
+                    const imgs = Array.from(document.querySelectorAll('img'));
+                    const rows = [];
+                    const seen = new Set();
+                    for (const img of imgs) {
+                        const row = rowOf(img);
+                        if (!row || seen.has(row)) continue;
+                        seen.add(row);
+                        if (firstLine(row)) rows.push(row);
+                    }
+                    out.mode = 'rows:' + rows.length;
+                    for (const row of rows) {
+                        out.rows++;
+                        const uname = firstLine(row);
+                        if (!out.sample) {
+                            out.sample = uname + ' :: '
+                                + row.outerHTML.slice(0, 220);
+                        }
+                        const btn = row.querySelector(
+                            '[role="checkbox"], button, [role="button"]'
+                        ) || row;
+                        const checked = isChecked(btn) || isChecked(row);
+                        const allow = uname === allowed
+                            || uname.includes(allowed);
+                        if (allow) {
+                            if (checked) { btn.click();
+                                out.unselected_allowed++; }
+                            else { out.kept++; }
+                        } else if (!checked) { btn.click(); out.selected++; }
+                        else { out.kept++; }
+                    }
+                    return out;
+                }
+
+                // Modo checkbox.
                 const seen = new Set();
-                for (const a of anchors) {
-                    const href = a.getAttribute('href') || '';
-                    const m = href.match(/^\\/([A-Za-z0-9._]+)\\/?$/);
-                    if (!m) continue;
-                    const username = m[1].toLowerCase();
-                    if (seen.has(username)) continue;
-                    seen.add(username);
-
-                    // Sobe até a linha (ancestral com um botão/checkbox).
-                    let row = a;
-                    for (let i = 0; i < 6 && row; i++) {
-                        if (row.querySelector(
-                            'button, [role="button"], [role="checkbox"], '
-                            + 'svg[aria-label]')) {
-                            break;
-                        }
-                        row = row.parentElement;
-                    }
-                    if (!row) continue;
+                for (const cb of toggles) {
+                    const row = rowOf(cb);
+                    if (!row || seen.has(row)) continue;
+                    seen.add(row);
                     out.rows++;
+                    const uname = firstLine(row);
                     if (!out.sample) {
-                        out.sample = (row.innerText || '').slice(0, 40)
-                            + ' :: ' + row.outerHTML.slice(0, 180);
+                        out.sample = uname + ' :: '
+                            + row.outerHTML.slice(0, 220);
                     }
-
-                    // Detecta estado de seleção pelo aria-label do ícone.
-                    const labelled = row.querySelector('[aria-label]');
-                    const lbl = labelled
-                        ? (labelled.getAttribute('aria-label') || '')
-                            .toLowerCase()
-                        : '';
-                    const isSelected = lbl.includes('selecionad')
-                        || lbl.includes('selected')
-                        || lbl.includes('marcad')
-                        || row.querySelector('[aria-checked="true"]') !== null;
-
-                    const toggle = row.querySelector(
-                        'button, [role="button"], [role="checkbox"]'
-                    ) || row;
-
-                    if (username === allowed) {
-                        if (isSelected) {
-                            toggle.click();
-                            out.unselected_allowed++;
-                        } else {
-                            out.kept++;
-                        }
-                    } else {
-                        if (!isSelected) {
-                            toggle.click();
-                            out.selected++;
-                        } else {
-                            out.kept++;
-                        }
-                    }
+                    const checked = isChecked(cb);
+                    const allow = uname === allowed || uname.includes(allowed);
+                    if (allow) {
+                        if (checked) { cb.click(); out.unselected_allowed++; }
+                        else { out.kept++; }
+                    } else if (!checked) { cb.click(); out.selected++; }
+                    else { out.kept++; }
                 }
                 return out;
             }""",
@@ -1319,8 +1364,13 @@ class InstagramBot:
             res = self._process_hide_story_rows(allowed)
             stats["rows"] = max(stats["rows"], res.get("rows", 0))
 
-            if first_dump and res.get("sample"):
-                self._log(f"  [debug linha] {res['sample']}")
+            if first_dump:
+                self._log(
+                    f"  [debug] modo={res.get('mode')} "
+                    f"checkboxes={res.get('cbx')} linhas={res.get('rows')}"
+                )
+                if res.get("sample"):
+                    self._log(f"  [debug linha] {res['sample']}")
                 first_dump = False
 
             newly = res.get("selected", 0)
