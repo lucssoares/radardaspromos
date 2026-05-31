@@ -291,6 +291,42 @@ class InstagramBot:
                 else:
                     raise
 
+    def _ensure_page(self) -> bool:
+        """Garante uma aba viva. Reconecta/abre nova se a atual fechou.
+
+        Retorna True se há uma página utilizável.
+        """
+        # Página atual ainda viva?
+        try:
+            if self._page is not None and not self._page.is_closed():
+                return True
+        except Exception:
+            pass
+
+        # Tenta reaproveitar uma aba aberta do contexto existente.
+        try:
+            if self._context is not None:
+                pages = [p for p in self._context.pages if not p.is_closed()]
+                if pages:
+                    self._page = pages[0]
+                    self._log("Aba recuperada (reaproveitando janela aberta).")
+                    return True
+                self._page = self._context.new_page()
+                self._log("Nova aba aberta no Chrome.")
+                return True
+        except Exception:
+            pass
+
+        # Último recurso: reconectar via CDP.
+        try:
+            if self._playwright is not None:
+                self._log("Reconectando ao Chrome...")
+                self.connect_to_chrome(self._playwright)
+                return self._page is not None and not self._page.is_closed()
+        except Exception as exc:
+            self._log(f"Não consegui reconectar ao Chrome: {exc}")
+        return False
+
     def close_browser(self) -> None:
         if self._browser:
             try:
@@ -1242,11 +1278,27 @@ class InstagramBot:
             f"Abrindo configurações de 'Ocultar story' (exceto @{allowed})..."
         )
 
+        if not self._ensure_page():
+            self._log(
+                "Não há aba do Chrome disponível. Clique em 'Conectar Bot' "
+                "novamente (a janela do Chrome pode ter sido fechada)."
+            )
+            return stats
+
         try:
             opened = self._open_hide_story_from_list(my_user)
         except Exception as exc:
             self._log(f"Erro ao abrir configurações: {exc}")
-            opened = False
+            # Se a aba caiu no meio do caminho, recupera e tenta de novo.
+            if "closed" in str(exc).lower() and self._ensure_page():
+                self._log("Recuperando aba e tentando novamente...")
+                try:
+                    opened = self._open_hide_story_from_list(my_user)
+                except Exception as exc2:
+                    self._log(f"Erro na segunda tentativa: {exc2}")
+                    opened = False
+            else:
+                opened = False
 
         if not opened:
             self._log(
