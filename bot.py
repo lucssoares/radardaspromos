@@ -1116,22 +1116,55 @@ class InstagramBot:
         (/accounts/hide_story_and_live_from/). Se por algum motivo não
         abrir a lista, faz fallback pelo caminho de menus.
         """
-        # 1. Tentar o link direto (rápido, mas costuma redirecionar p/ /explore/).
-        try:
-            self._page.goto(
-                self.HIDE_STORY_URL, wait_until="load", timeout=30000
-            )
-            self._delay(3, 5)
+        # 1. Link direto — é o caminho oficial confirmado pelo usuário.
+        # O IG às vezes pisca em /explore/ antes de assentar, então
+        # tentamos algumas vezes e aguardamos a URL fixar em hide_story.
+        for attempt in range(1, 4):
+            try:
+                self._page.goto(
+                    self.HIDE_STORY_URL,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+            except Exception as exc:
+                self._log(f"  Link direto (tentativa {attempt}) falhou: {exc}")
+                self._delay(2, 3)
+                continue
+
+            # Aguarda a URL assentar (até ~12s), checando o redirect.
+            settled = False
+            for _ in range(12):
+                self._delay(1, 1.6)
+                cur = (self._page.url or "").lower()
+                if "hide_story" in cur:
+                    settled = True
+                    break
+                # Se caiu no feed/explore, força o link de novo.
+                if "/explore" in cur or cur.rstrip("/").endswith(".com"):
+                    try:
+                        self._page.goto(
+                            self.HIDE_STORY_URL,
+                            wait_until="domcontentloaded",
+                            timeout=30000,
+                        )
+                    except Exception:
+                        pass
+
             cur = (self._page.url or "")
-            if "hide_story" in cur.lower() and self._is_on_hide_story_list():
-                self._log("  Tela 'Ocultar story de' aberta (link direto).")
+            if settled and self._is_on_hide_story_list():
+                self._log(
+                    f"  Tela 'Ocultar story de' aberta (link direto): {cur}"
+                )
                 return True
             self._log(
-                f"  Link direto redirecionou para {cur} — "
-                "tentando pelos menus..."
+                f"  Tentativa {attempt}: URL ficou em {cur} "
+                "(esperado hide_story). Tentando de novo..."
             )
-        except Exception as exc:
-            self._log(f"  Link direto falhou ({exc}); tentando menus...")
+
+        self._log(
+            "  Link direto não fixou na tela de ocultar story; "
+            "tentando pelos menus..."
+        )
 
         # 2. Fallback: Perfil → Mais → Configurações → Ocultar story → ...de.
         dest = (
