@@ -30,6 +30,7 @@ from mercadolivre import (
     scrape_offers,
     scrape_offers_by_keyword,
 )
+from story_image import build_story_image
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -43,6 +44,22 @@ def resource_path(rel_path: str) -> str:
 
 # Fundo padrão usado nos stories (Radar das Promos).
 STORY_BG_PATH = resource_path(os.path.join("assets", "story_bg.jpg"))
+FONT_REGULAR = resource_path(os.path.join("assets", "DejaVuSans.ttf"))
+FONT_BOLD = resource_path(os.path.join("assets", "DejaVuSans-Bold.ttf"))
+
+# Onde a imagem composta do story é salva antes de subir.
+_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".instafollow_bot")
+STORY_OUT_PATH = os.path.join(_APP_DATA_DIR, "story_compose.jpg")
+
+
+def display_link(url: str) -> str:
+    """Versão curta/limpa do link para mostrar no story."""
+    link = (url or "").strip()
+    for prefix in ("https://", "http://"):
+        if link.lower().startswith(prefix):
+            link = link[len(prefix):]
+            break
+    return link.rstrip("/")
 
 
 class App(ctk.CTk):
@@ -1529,8 +1546,17 @@ class App(ctk.CTk):
 
         try:
             if post_type == "story":
+                self._safe_offers_log(f"Montando story: {title}...")
+                build_story_image(
+                    STORY_BG_PATH,
+                    STORY_OUT_PATH,
+                    product_image_url=image_url,
+                    link=display_link(affiliate_link),
+                    font_regular=FONT_REGULAR,
+                    font_bold=FONT_BOLD,
+                )
                 self._safe_offers_log(f"Postando story: {title}...")
-                result = self._api.publish_story(image_url)
+                result = self._api.publish_story_image(STORY_OUT_PATH)
             else:
                 caption = format_instagram_caption(product, affiliate_link)
                 self._safe_offers_log(f"Postando no feed: {title}...")
