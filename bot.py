@@ -979,31 +979,38 @@ class InstagramBot:
                 const sel = 'a,button,[role="button"],[role="link"],'
                     + '[role="menuitem"],span,div';
                 const els = document.querySelectorAll(sel);
+                let best = null;
+                let bestLen = Infinity;
                 for (const el of els) {
+                    // Ignora elementos invisíveis.
+                    if (!el.offsetParent && el.tagName !== 'BODY') continue;
                     const t = (el.innerText || '').trim().toLowerCase();
                     if (!t) continue;
                     const ok = exact
                         ? needles.includes(t)
                         : needles.some(n => t.includes(n));
-                    if (ok) {
-                        let target = el;
-                        // Sobe até um ancestral clicável, se houver.
-                        for (let i = 0; i < 3 && target; i++) {
-                            const role = target.getAttribute
-                                ? target.getAttribute('role') : null;
-                            if (target.tagName === 'A'
-                                || target.tagName === 'BUTTON'
-                                || role === 'button' || role === 'link'
-                                || role === 'menuitem') {
-                                break;
-                            }
-                            target = target.parentElement;
-                        }
-                        (target || el).click();
-                        return t.slice(0, 60);
+                    if (ok && t.length < bestLen) {
+                        best = el;
+                        bestLen = t.length;
                     }
                 }
-                return '';
+                if (!best) return '';
+                const label = (best.innerText || '').trim()
+                    .toLowerCase().slice(0, 60);
+                // Sobe até um ancestral clicável, se houver.
+                let target = best;
+                for (let i = 0; i < 4 && target; i++) {
+                    const role = target.getAttribute
+                        ? target.getAttribute('role') : null;
+                    if (target.tagName === 'A' || target.tagName === 'BUTTON'
+                        || role === 'button' || role === 'link'
+                        || role === 'menuitem' || role === 'tab') {
+                        break;
+                    }
+                    target = target.parentElement;
+                }
+                (target || best).click();
+                return label;
             }""",
             {"needles": needles, "exact": exact},
         )
@@ -1068,16 +1075,17 @@ class InstagramBot:
         self._delay(1.5, 2.5)
 
         # 3. Dentro do menu, clicar em "Configurações"
-        #    (ou "Configurações e privacidade").
+        #    (item exato do menu, não o container).
         clicked = self._click_by_text(
             [
+                "configurações",
+                "configuracoes",
                 "configurações e privacidade",
                 "configuracoes e privacidade",
                 "settings and privacy",
-                "configurações",
-                "configuracoes",
                 "settings",
-            ]
+            ],
+            exact=True,
         )
         self._log(f"  Menu: '{clicked}'")
         self._delay(2.5, 3.5)
