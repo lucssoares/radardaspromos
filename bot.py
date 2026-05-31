@@ -1089,24 +1089,23 @@ class InstagramBot:
     )
 
     def _is_on_hide_story_list(self) -> bool:
-        """Verifica se a lista de pessoas (ocultar story) está na tela."""
+        """Verifica se a tela de 'Ocultar story de' está aberta de fato.
+
+        Checagem ESTRITA: só confirma se a URL for a de configurações
+        (.../hide_story_and_live...) OU se o título dessa tela estiver na
+        página. Assim evitamos confundir com /explore/ (que também tem
+        campo de busca e links de perfil).
+        """
         return self._page.evaluate(
             """() => {
+                const url = (location.href || '').toLowerCase();
+                const onHideUrl = url.includes('hide_story');
                 const txt = (document.body.innerText || '').toLowerCase();
-                const hasSearch = !!document.querySelector(
-                    "input[placeholder*='Pesquis'], "
-                    + "input[placeholder*='Search'], "
-                    + "input[aria-label*='Pesquis'], "
-                    + "input[aria-label*='Search']"
-                );
-                // Alguma linha com link de perfil dentro do conteúdo?
-                const hasRow = !!document.querySelector(
-                    "a[href^='/'][role='link']"
-                );
-                return hasSearch
-                    || txt.includes('ocultar story e transmiss')
-                    || txt.includes('hide story and live')
-                    || (txt.includes('ocultar') && hasRow);
+                const hasHideTitle =
+                    txt.includes('ocultar story e transmiss')
+                    || txt.includes('ocultar story e live')
+                    || txt.includes('hide story and live');
+                return onHideUrl || hasHideTitle;
             }"""
         )
 
@@ -1117,17 +1116,19 @@ class InstagramBot:
         (/accounts/hide_story_and_live_from/). Se por algum motivo não
         abrir a lista, faz fallback pelo caminho de menus.
         """
-        # 1. Tentar o link direto (forma mais confiável).
+        # 1. Tentar o link direto (rápido, mas costuma redirecionar p/ /explore/).
         try:
             self._page.goto(
                 self.HIDE_STORY_URL, wait_until="load", timeout=30000
             )
             self._delay(3, 5)
-            if self._is_on_hide_story_list():
+            cur = (self._page.url or "")
+            if "hide_story" in cur.lower() and self._is_on_hide_story_list():
                 self._log("  Tela 'Ocultar story de' aberta (link direto).")
                 return True
             self._log(
-                "  Link direto não mostrou a lista; tentando pelos menus..."
+                f"  Link direto redirecionou para {cur} — "
+                "tentando pelos menus..."
             )
         except Exception as exc:
             self._log(f"  Link direto falhou ({exc}); tentando menus...")
@@ -1180,7 +1181,9 @@ class InstagramBot:
         )
         self._delay(2.5, 3.5)
 
-        return self._is_on_hide_story_list()
+        ok = self._is_on_hide_story_list()
+        self._log(f"  URL atual após menus: {self._page.url}")
+        return ok
 
     def _process_hide_story_rows(self, allowed: str) -> dict:
         """Marca/desmarca pessoas na lista de 'Ocultar story de'.
@@ -1193,6 +1196,19 @@ class InstagramBot:
             """(allowed) => {
                 const out = {selected: 0, kept: 0, unselected_allowed: 0,
                              rows: 0, sample: '', cbx: 0, mode: ''};
+
+                // GUARD: nunca operar fora da tela de ocultar story.
+                const url = (location.href || '').toLowerCase();
+                const txt = (document.body.innerText || '').toLowerCase();
+                const onHide = url.includes('hide_story')
+                    || txt.includes('ocultar story e transmiss')
+                    || txt.includes('ocultar story e live')
+                    || txt.includes('hide story and live');
+                if (!onHide) {
+                    out.mode = 'wrong_page';
+                    out.sample = 'url=' + url.slice(0, 120);
+                    return out;
+                }
 
                 const firstLine = (el) => {
                     const lines = (el.innerText || '').split('\\n')
@@ -1363,6 +1379,13 @@ class InstagramBot:
         while stale < 6 and not self._stop_requested:
             res = self._process_hide_story_rows(allowed)
             stats["rows"] = max(stats["rows"], res.get("rows", 0))
+
+            if res.get("mode") == "wrong_page":
+                self._log(
+                    "  Abortando: não estou na tela de ocultar story "
+                    f"({res.get('sample')}). Nada foi marcado."
+                )
+                return stats
 
             if first_dump:
                 self._log(
