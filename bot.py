@@ -1292,23 +1292,35 @@ class InstagramBot:
                     return (lines[0] || '').replace(/^@/, '').toLowerCase();
                 };
                 const isChecked = (el) => {
-                    if (!el) return false;
-                    if (el.getAttribute
-                        && el.getAttribute('aria-checked') === 'true') {
+                    if (!el || !el.getAttribute) return false;
+                    if (el.getAttribute('aria-checked') === 'true'
+                        || el.getAttribute('aria-selected') === 'true') {
                         return true;
                     }
                     if (el.tagName === 'INPUT') return !!el.checked;
                     return false;
                 };
 
-                // Checkboxes REAIS (sem aria-selected, que pega abas do
-                // menu lateral como 'Perfil' -> navegava para /soareluc/).
-                let toggles = Array.from(document.querySelectorAll(
-                    '[role="checkbox"], input[type="checkbox"], [aria-checked]'
+                // Toggles reais incluem aria-selected (os de pessoa usam
+                // esse atributo). MAS ignoramos os que estão dentro de um
+                // <a> ou de navegação (a aba 'Perfil' é um <a> que levava
+                // para /soareluc/).
+                let raw = Array.from(document.querySelectorAll(
+                    '[role="checkbox"], input[type="checkbox"], '
+                    + '[aria-checked], [aria-selected]'
                 ));
+                let toggles = raw.filter(el => {
+                    if (el.closest && (el.closest('a')
+                        || el.closest('nav')
+                        || el.closest('[role="navigation"]')
+                        || el.closest('[role="tablist"]'))) {
+                        return false;
+                    }
+                    return true;
+                });
                 out.cbx = toggles.length;
 
-                // Monta itens (linha + @) a partir de cada checkbox.
+                // Monta itens (linha + @) a partir de cada toggle.
                 const seen = new Set();
                 const items = [];
                 for (const cb of toggles) {
@@ -1332,7 +1344,11 @@ class InstagramBot:
                     // evita ocultar de quem não conseguimos identificar).
                     if (!it.uname) { continue; }
                     const checked = isChecked(it.cb);
-                    const allow = it.uname === allowed;
+                    // Poupa o permitido por @ exato OU se o texto da linha
+                    // contém o @ (rede de segurança p/ o leferreira_99).
+                    const rt = rowText(it.row).toLowerCase();
+                    const allow = !!allowed
+                        && (it.uname === allowed || rt.includes(allowed));
                     if (allow) {
                         if (checked) {
                             it.cb.click();
