@@ -1218,19 +1218,23 @@ class InstagramBot:
         self._log(f"  URL atual após menus: {self._page.url}")
         return ok
 
-    def _process_hide_story_rows(self, allowed: str) -> dict:
-        """Marca/desmarca pessoas na lista de 'Ocultar story de'.
+    def _process_hide_story_rows(
+        self, allowed: str, done: list | None = None
+    ) -> dict:
+        """Marca pessoas na lista de 'Ocultar story de' (todos exceto um).
 
-        Seleciona (oculta) todos exceto o perfil permitido. Desmarca o
-        perfil permitido se estiver selecionado. Roda em JavaScript sobre
-        as linhas atualmente renderizadas.
+        Clica em cada linha de pessoa SÓ uma vez: recebe a lista de @ já
+        marcados (``done``) e clica apenas nos novos visíveis. Retorna os
+        @ visíveis e os @ clicados nesta passada (a lista é virtualizada,
+        então marcamos enquanto rolamos).
         """
         return self._page.evaluate(
-            """(allowed) => {
-                const out = {selected: 0, kept: 0, unselected_allowed: 0,
-                             rows: 0, sample: '', cbx: 0, mode: '',
-                             named: 0, no_toggle: 0,
-                             cnt_cb: 0, cnt_ac: 0, cnt_as: 0, cnt_links: 0};
+            """(args) => {
+                const allowed = args.allowed;
+                const done = new Set(args.done || []);
+                const out = {visible: [], clicked: [], rows: 0, mode: '',
+                             named: 0, sample: '',
+                             cnt_cb: 0, cnt_ac: 0, cnt_as: 0};
 
                 // GUARD: nunca operar fora da tela de ocultar story.
                 const url = (location.href || '').toLowerCase();
@@ -1343,21 +1347,24 @@ class InstagramBot:
                         + ' :: ' + it.row.outerHTML.slice(0, 500);
                 }
 
+                // Clica cada @ no máximo uma vez (dedup por username e por
+                // 'done' vindo do Python). Nunca clica no permitido.
+                const seenU = new Set();
                 for (const p of persons) {
+                    if (seenU.has(p.uname)) continue;
+                    seenU.add(p.uname);
+                    out.visible.push(p.uname);
                     const rt = rowText(p.row).toLowerCase();
                     const allow = !!allowed
                         && (p.uname === allowed || rt.includes(allowed));
-                    const checked = rowChecked(p.row);
-                    if (allow) {
-                        if (checked) { p.row.click();
-                            out.unselected_allowed++; }
-                        else { out.kept++; }
-                    } else if (!checked) { p.row.click(); out.selected++; }
-                    else { out.kept++; }
+                    if (allow) continue;
+                    if (done.has(p.uname)) continue;
+                    p.row.click();
+                    out.clicked.push(p.uname);
                 }
                 return out;
             }""",
-            allowed,
+            {"allowed": allowed, "done": list(done or [])},
         )
 
     def _scroll_hide_story_list(self) -> None:
@@ -1477,10 +1484,11 @@ class InstagramBot:
         self._delay(1, 2)
 
         stale = 0
-        total_selected = 0
+        done: set[str] = set()
+        visible_seen: set[str] = set()
         first_dump = True
-        while stale < 6 and not self._stop_requested:
-            res = self._process_hide_story_rows(allowed)
+        while stale < 8 and not self._stop_requested:
+            res = self._process_hide_story_rows(allowed, list(done))
             stats["rows"] = max(stats["rows"], res.get("rows", 0))
 
             if res.get("mode") == "wrong_page":
@@ -1493,8 +1501,7 @@ class InstagramBot:
             if first_dump:
                 self._log(
                     f"  [debug] modo={res.get('mode')} "
-                    f"linhas={res.get('rows')} com_@={res.get('named')} "
-                    f"sem_toggle={res.get('no_toggle')} | "
+                    f"linhas={res.get('rows')} com_@={res.get('named')} | "
                     f"checkbox={res.get('cnt_cb')} "
                     f"aria-checked={res.get('cnt_ac')} "
                     f"aria-selected={res.get('cnt_as')}"
@@ -1503,21 +1510,27 @@ class InstagramBot:
                     self._log(f"  [debug linha] {res['sample']}")
                 first_dump = False
 
-            newly = res.get("selected", 0)
-            total_selected += newly
-            if res.get("unselected_allowed"):
-                self._log(f"  @{allowed} desmarcado (poderá ver os stories).")
+            clicked = res.get("clicked", []) or []
+            visible = res.get("visible", []) or []
+            for user in clicked:
+                done.add(user)
+            new_vis = [u for u in visible if u not in visible_seen]
+            for user in visible:
+                visible_seen.add(user)
 
-            if newly == 0:
+            if not clicked and not new_vis:
                 stale += 1
             else:
                 stale = 0
-                self._log(f"  {total_selected} perfis marcados para ocultar...")
+                self._log(
+                    f"  {len(done)} perfis marcados para ocultar..."
+                )
 
             self._scroll_hide_story_list()
             self._delay(1.5, 2.5)
 
-        stats["hidden"] = total_selected
+        stats["hidden"] = len(done)
+        stats["rows"] = len(visible_seen)
         self._log("=" * 50)
         self._log("Configuração concluída!")
         self._log(f"  Marcados para ocultar: {stats['hidden']}")
