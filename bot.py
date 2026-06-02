@@ -1432,6 +1432,142 @@ class InstagramBot:
             }"""
         )
 
+    def create_affiliate_link(self, product_url: str, tag: str = "") -> str:
+        """Gera o link curto de afiliado (meli.la) pelo Portal do Afiliado.
+
+        Usa a SESSÃO LOGADA do Chrome do usuário (perfil de afiliado), o
+        mesmo endpoint que o Linkbuilder usa internamente:
+        POST /affiliate-program/api/v2/affiliates/createLink
+
+        Retorna a URL curta (https://meli.la/...) ou levanta exceção com a
+        mensagem de erro pra ser exibida no log.
+        """
+        if not self._ensure_page():
+            raise RuntimeError(
+                "Não há aba do Chrome disponível. Clique em 'Conectar Bot'."
+            )
+
+        # Precisa estar no domínio do ML (same-origin) p/ enviar cookies/csrf.
+        cur = (self._page.url or "").lower()
+        if "mercadolivre.com.br" not in cur:
+            self._page.goto(
+                "https://www.mercadolivre.com.br/afiliados/linkbuilder",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            self._page.wait_for_timeout(1500)
+
+        result = self._page.evaluate(
+            """async (args) => {
+                const { productUrl, tag } = args;
+                const html = document.documentElement.innerHTML;
+                let csrf = '';
+                const pats = [
+                    /name=\\"csrf-token\\"\\s+content=\\"([^\\"]+)\\"/i,
+                    /\\"csrfToken\\"\\s*:\\s*\\"([^\\"]+)\\"/i,
+                    /\\"csrf_token\\"\\s*:\\s*\\"([^\\"]+)\\"/i,
+                    /\\\\\\"csrfToken\\\\\\":\\\\\\"([^\\"\\\\]+)\\\\\\"/i,
+                ];
+                for (const re of pats) {
+                    const m = html.match(re);
+                    if (m) { csrf = m[1]; break; }
+                }
+                if (!csrf) {
+                    const el = document.querySelector(
+                        'meta[name=\\"csrf-token\\"]');
+                    if (el) csrf = el.getAttribute('content') || '';
+                }
+                const headers = {
+                    'accept': 'application/json, text/plain, */*',
+                    'content-type': 'application/json',
+                };
+                if (csrf) headers['x-csrf-token'] = csrf;
+                const payload = { urls: [productUrl] };
+                if (tag) payload.tag = tag;
+                try {
+                    const resp = await fetch(
+                        'https://www.mercadolivre.com.br'
+                        + '/affiliate-program/api/v2/affiliates/createLink',
+                        {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify(payload),
+                            credentials: 'include',
+                        }
+                    );
+                    const text = await resp.text();
+                    let data = null;
+                    try { data = JSON.parse(text); } catch (e) {}
+                    return {
+                        status: resp.status,
+                        csrf: !!csrf,
+                        text: text.slice(0, 800),
+                        data,
+                    };
+                } catch (e) {
+                    return { error: String(e), csrf: !!csrf };
+                }
+            }""",
+            {"productUrl": product_url, "tag": tag},
+        )
+
+        if result.get("error"):
+            raise RuntimeError(f"Falha na requisição: {result['error']}")
+
+        status = result.get("status")
+        short = self._parse_affiliate_response(result.get("data"))
+        if not short:
+            # Tenta achar a URL curta no texto bruto.
+            m = re.search(
+                r"https?://(?:meli\.la|mercadolivre\.com[^\s\"']*?/sec)/?[^\s\"']+",
+                result.get("text", ""),
+            )
+            if m:
+                short = m.group(0)
+
+        if not short:
+            raise RuntimeError(
+                f"Não consegui extrair o link (status={status}, "
+                f"csrf={result.get('csrf')}). Resposta: "
+                f"{result.get('text', '')[:200]}"
+            )
+        return short
+
+    @staticmethod
+    def _parse_affiliate_response(data) -> str:
+        """Extrai a URL curta da resposta do createLink (formatos variados)."""
+        if not isinstance(data, dict):
+            return ""
+
+        def _from_item(item) -> str:
+            if isinstance(item, str):
+                return item
+            if isinstance(item, dict):
+                for key in (
+                    "short_url", "shortUrl", "short", "url",
+                    "affiliate_url", "affiliateUrl", "link",
+                ):
+                    val = item.get(key)
+                    if isinstance(val, str) and val.startswith("http"):
+                        return val
+            return ""
+
+        urls = data.get("urls")
+        if isinstance(urls, list) and urls:
+            link = _from_item(urls[0])
+            if link:
+                return link
+
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            return InstagramBot._parse_affiliate_response(inner)
+
+        for key in ("short_url", "shortUrl", "short", "url"):
+            val = data.get(key)
+            if isinstance(val, str) and val.startswith("http"):
+                return val
+        return ""
+
     def hide_story_via_settings(
         self, allowed_username: str, my_username: str = ""
     ) -> dict:

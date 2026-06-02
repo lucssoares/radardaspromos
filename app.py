@@ -655,6 +655,18 @@ class App(ctk.CTk):
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
         btn_frame.pack(padx=10, pady=(2, 2), fill="x")
 
+        self.offers_connect_btn = ctk.CTkButton(
+            btn_frame,
+            text="Conectar Bot",
+            command=self._on_connect_bot,
+            width=120,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#607D8B",
+            hover_color="#455A64",
+        )
+        self.offers_connect_btn.pack(side="left", padx=(0, 6))
+
         self.search_offers_btn = ctk.CTkButton(
             btn_frame,
             text="Buscar Ofertas",
@@ -1521,6 +1533,38 @@ class App(ctk.CTk):
 
         self._submit_task(_task)
 
+    def _resolve_affiliate_link(self, product: dict) -> str:
+        """Resolve o link de afiliado do produto.
+
+        Prioriza o link curto OFICIAL (meli.la) gerado pelo Portal do
+        Afiliado via sessão logada do Chrome. Se o bot não estiver
+        conectado ou falhar, cai no link com a tag de afiliado anexada.
+        """
+        product_url = product.get("url", "")
+        tag = self.affiliate_tag_entry.get().strip()
+
+        if self._bot is not None:
+            try:
+                self._safe_offers_log("Gerando link de afiliado (meli.la)...")
+                short = self._bot.create_affiliate_link(product_url)
+                if short:
+                    self._safe_offers_log(f"Link de afiliado: {short}")
+                    return short
+            except Exception as exc:
+                self._safe_offers_log(
+                    f"Não consegui gerar o link oficial ({exc}). "
+                    "Usando link com tag."
+                )
+        else:
+            self._safe_offers_log(
+                "Bot não conectado — clique em 'Conectar Bot' p/ gerar o "
+                "link meli.la. Usando link com tag por enquanto."
+            )
+
+        if tag:
+            return generate_affiliate_link(product_url, tag)
+        return product_url
+
     def _post_product_to_instagram(self, product: dict) -> bool:
         """Posta um produto no Instagram. Retorna True se OK."""
         if not self._api:
@@ -1536,10 +1580,7 @@ class App(ctk.CTk):
             )
             return False
 
-        tag = self.affiliate_tag_entry.get().strip()
-        affiliate_link = generate_affiliate_link(
-            product["url"], tag
-        ) if tag else product["url"]
+        affiliate_link = self._resolve_affiliate_link(product)
 
         post_type = self.post_type_var.get()
         title = product.get("title", "")[:50]
