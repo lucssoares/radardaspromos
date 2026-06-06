@@ -30,6 +30,7 @@ from mercadolivre import (
     scrape_offers,
     scrape_offers_by_keyword,
 )
+from android_story import AndroidStoryPoster
 from story_image import build_story_image
 
 ctk.set_appearance_mode("dark")
@@ -78,6 +79,7 @@ class App(ctk.CTk):
         self._chrome_process = None
         self._running = False
         self._api: InstagramAPI | None = None
+        self._android: AndroidStoryPoster | None = None
 
         # Fila de tarefas para a worker thread do Playwright
         self._task_queue: queue.Queue = queue.Queue()
@@ -742,6 +744,47 @@ class App(ctk.CTk):
         )
         self.copy_whatsapp_btn.pack(side="left")
 
+        # ── Android (emulador) para story com sticker de link ────────────
+        android_frame = ctk.CTkFrame(tab)
+        android_frame.pack(padx=10, pady=(2, 4), fill="x")
+
+        ctk.CTkLabel(
+            android_frame,
+            text="Android (sticker):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=0, column=0, padx=8, pady=6, sticky="w")
+
+        self.android_serial_entry = ctk.CTkEntry(
+            android_frame,
+            placeholder_text="Serial ADB (ex: emulator-5554, 127.0.0.1:5555)",
+            width=280,
+        )
+        self.android_serial_entry.grid(row=0, column=1, padx=4, pady=6)
+
+        self.android_connect_btn = ctk.CTkButton(
+            android_frame,
+            text="Conectar Android",
+            command=self._on_connect_android,
+            width=130,
+            height=32,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#4CAF50",
+            hover_color="#388E3C",
+        )
+        self.android_connect_btn.grid(row=0, column=2, padx=4, pady=6)
+
+        self.android_diag_btn = ctk.CTkButton(
+            android_frame,
+            text="Diagnóstico",
+            command=self._on_android_diagnostic,
+            width=100,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            fg_color="#FF9800",
+            hover_color="#F57C00",
+        )
+        self.android_diag_btn.grid(row=0, column=3, padx=4, pady=6)
+
         # ── Tipo de postagem ─────────────────────────────────────────────
         post_type_frame = ctk.CTkFrame(tab, fg_color="transparent")
         post_type_frame.pack(padx=10, pady=(0, 2), fill="x")
@@ -1116,6 +1159,64 @@ class App(ctk.CTk):
                 self.after(0, lambda: self.login_btn.configure(state="normal"))
 
         self._submit_task(_task)
+
+    # ── Android (emulador) ────────────────────────────────────────────────
+    def _on_connect_android(self) -> None:
+        """Conecta ao dispositivo Android via ADB (uiautomator2)."""
+        serial = self.android_serial_entry.get().strip() or None
+        self.android_connect_btn.configure(state="disabled")
+        self._safe_offers_log(
+            f"Conectando ao Android ({serial or 'auto-detect'})..."
+        )
+
+        def _do():
+            try:
+                poster = AndroidStoryPoster(
+                    serial=serial, log=self._safe_offers_log
+                )
+                if poster.connect():
+                    self._android = poster
+                    self._safe_offers_log(
+                        "Android conectado! Stories com sticker de link "
+                        "usarão o app do Instagram."
+                    )
+                else:
+                    self._safe_offers_log("Falha ao conectar ao Android.")
+            except Exception as exc:
+                self._safe_offers_log(f"Erro ao conectar: {exc}")
+            finally:
+                self.after(
+                    0,
+                    lambda: self.android_connect_btn.configure(
+                        state="normal"
+                    ),
+                )
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_android_diagnostic(self) -> None:
+        """Roda o diagnóstico do Instagram no Android (captura hierarquia)."""
+        if self._android is None:
+            self._append_offers_log(
+                "Conecte ao Android primeiro (botão 'Conectar Android')."
+            )
+            return
+        self.android_diag_btn.configure(state="disabled")
+        self._safe_offers_log("Rodando diagnóstico do Instagram no Android...")
+
+        def _do():
+            try:
+                report = self._android.run_diagnostic()
+                self._safe_offers_log(report)
+            except Exception as exc:
+                self._safe_offers_log(f"Erro no diagnóstico: {exc}")
+            finally:
+                self.after(
+                    0,
+                    lambda: self.android_diag_btn.configure(state="normal"),
+                )
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_start(self) -> None:
         target = self.target_entry.get().strip().lstrip("@").strip("/")
@@ -1568,11 +1669,12 @@ class App(ctk.CTk):
     def _post_product_to_instagram(self, product: dict) -> bool:
         """Posta um produto no Instagram. Retorna True se OK."""
         post_type = self.post_type_var.get()
-        # Story com sticker vai pelo navegador (bot); só o feed/reserva
-        # exige a API. Sem bot e sem API não dá pra postar story.
-        if not self._api and not (post_type == "story" and self._bot):
+        # Story com sticker vai pelo Android (preferido) ou navegador (bot).
+        # Sem Android/bot/API não dá pra postar.
+        has_story_engine = self._android or self._bot
+        if not self._api and not (post_type == "story" and has_story_engine):
             self._safe_offers_log(
-                "Conecte o Bot (story c/ sticker) ou configure o token "
+                "Conecte o Android (sticker), o Bot ou configure o token "
                 "da API na aba Dashboard."
             )
             return False
@@ -1591,7 +1693,7 @@ class App(ctk.CTk):
         try:
             if post_type == "story":
                 self._safe_offers_log(f"Montando story: {title}...")
-                # Sem texto de link na imagem: o link vai no sticker clicável.
+                # Compõe imagem SEM link em texto (o link vai no sticker).
                 build_story_image(
                     STORY_BG_PATH,
                     STORY_OUT_PATH,
@@ -1601,36 +1703,53 @@ class App(ctk.CTk):
                     font_bold=FONT_BOLD,
                 )
 
-                # Caminho preferido: postar pelo navegador (web) com
-                # sticker de link clicável (meli.la). A Graph API não
-                # suporta stickers.
-                if self._bot is not None:
+                # ── Prioridade 1: Android (app real, sticker clicável) ──
+                if self._android is not None:
+                    self._safe_offers_log(
+                        "Postando story via app Android (sticker de link)..."
+                    )
+                    res = self._android.post_story(
+                        STORY_OUT_PATH, link=affiliate_link
+                    )
+                    if res.get("ok"):
+                        self._safe_offers_log(
+                            "Story com sticker de link publicado (Android)!"
+                        )
+                        return True
+                    self._safe_offers_log(
+                        "Falha no story via Android "
+                        f"(passo: {res.get('step')}, "
+                        f"detalhe: {res.get('detail')}). "
+                        "Tentando reserva..."
+                    )
+
+                # ── Prioridade 2: Navegador web (bot/CDP emulando mobile)
+                elif self._bot is not None:
                     res = self._bot.post_story_web(
                         STORY_OUT_PATH, link=affiliate_link
                     )
                     if res.get("ok"):
                         self._safe_offers_log(
-                            "Story com sticker de link publicado!"
+                            "Story com sticker de link publicado (web)!"
                         )
                         return True
                     self._safe_offers_log(
                         "Falha no story via navegador "
-                        f"(passo: {res.get('step')}). Publicando via API "
-                        "(link em texto na imagem) como reserva."
+                        f"(passo: {res.get('step')}). Tentando reserva..."
                     )
+
                 else:
                     self._safe_offers_log(
-                        "Bot não conectado — sem sticker. Clique em "
-                        "'Conectar Bot' para o sticker de link. "
+                        "Sem Android nem Bot conectados — sem sticker. "
+                        "Conecte o Android ou Bot. "
                         "Publicando via API (link em texto) por enquanto."
                     )
 
-                # Reserva: recompõe com o link em texto e publica via API.
+                # ── Reserva: API (sem sticker, link em texto na imagem) ──
                 if not self._api:
                     self._safe_offers_log(
                         "Sem API para a reserva. Configure o token na aba "
-                        "Dashboard ou me envie o log acima p/ ajustar o "
-                        "fluxo do sticker."
+                        "Dashboard ou me envie o log acima p/ ajustar."
                     )
                     return False
                 build_story_image(
