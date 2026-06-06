@@ -1515,12 +1515,21 @@ class InstagramBot:
             raise RuntimeError(f"Falha na requisição: {result['error']}")
 
         status = result.get("status")
-        short = self._parse_affiliate_response(result.get("data"))
+        text = result.get("text", "")
+
+        # Preferência 1: o link super curto meli.la (formato simplificado).
+        meli = re.search(r"https?://meli\.la/[^\s\"'\\]+", text)
+        short = meli.group(0) if meli else ""
+
+        # Preferência 2: campos estruturados da resposta.
         if not short:
-            # Tenta achar a URL curta no texto bruto.
+            short = self._parse_affiliate_response(result.get("data"))
+
+        # Preferência 3: link /sec/ no texto bruto.
+        if not short:
             m = re.search(
-                r"https?://(?:meli\.la|mercadolivre\.com[^\s\"']*?/sec)/?[^\s\"']+",
-                result.get("text", ""),
+                r"https?://(?:www\.)?mercadolivre\.com[^\s\"'\\]*?/sec/[^\s\"'\\]+",
+                text,
             )
             if m:
                 short = m.group(0)
@@ -1567,6 +1576,251 @@ class InstagramBot:
             if isinstance(val, str) and val.startswith("http"):
                 return val
         return ""
+
+    # ------------------------------------------------------------------
+    # Postagem de STORY pelo navegador (web) com sticker de link clicável.
+    # A Graph API não permite stickers; o único jeito é pela interface web
+    # (emulando mobile, que é onde o Instagram libera criar story).
+    # ------------------------------------------------------------------
+    _MOBILE_UA = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
+        "Mobile/15E148 Safari/604.1"
+    )
+
+    def _enable_mobile(self) -> object | None:
+        """Ativa emulação mobile na aba atual (necessário p/ criar story)."""
+        try:
+            cdp = self._context.new_cdp_session(self._page)
+            cdp.send(
+                "Network.setUserAgentOverride",
+                {
+                    "userAgent": self._MOBILE_UA,
+                    "platform": "iPhone",
+                    "acceptLanguage": "pt-BR,pt;q=0.9",
+                },
+            )
+            cdp.send(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": 390,
+                    "height": 844,
+                    "deviceScaleFactor": 3,
+                    "mobile": True,
+                },
+            )
+            try:
+                cdp.send(
+                    "Emulation.setTouchEmulationEnabled", {"enabled": True}
+                )
+            except Exception:
+                pass
+            self._log("  Emulação mobile ativada.")
+            return cdp
+        except Exception as exc:
+            self._log(f"  Não consegui ativar emulação mobile: {exc}")
+            return None
+
+    def _disable_mobile(self, cdp) -> None:
+        """Desfaz a emulação mobile pra aba voltar ao normal."""
+        if cdp is None:
+            return
+        try:
+            cdp.send("Emulation.clearDeviceMetricsOverride")
+            cdp.send("Network.setUserAgentOverride", {"userAgent": ""})
+        except Exception:
+            pass
+
+    def _dump_clickables(self, limit: int = 25) -> None:
+        """Loga rótulos/aria-labels visíveis pra ajudar a achar seletores."""
+        try:
+            items = self._page.evaluate(
+                """(limit) => {
+                    const out = [];
+                    const els = document.querySelectorAll(
+                        'a,button,[role="button"],svg[aria-label],'
+                        + 'input,[role="menuitem"]');
+                    for (const el of els) {
+                        if (!el.offsetParent && el.tagName !== 'BODY')
+                            continue;
+                        const aria = el.getAttribute
+                            ? (el.getAttribute('aria-label') || '') : '';
+                        const txt = (el.innerText || '').trim().slice(0, 40);
+                        const tag = el.tagName.toLowerCase();
+                        const type = el.getAttribute
+                            ? (el.getAttribute('type') || '') : '';
+                        const acc = el.getAttribute
+                            ? (el.getAttribute('accept') || '') : '';
+                        if (!aria && !txt && tag !== 'input') continue;
+                        out.push(`${tag}${type ? '['+type+']' : ''}`
+                            + ` aria='${aria}' txt='${txt}'`
+                            + (acc ? ` accept='${acc}'` : ''));
+                        if (out.length >= limit) break;
+                    }
+                    return out;
+                }""",
+                limit,
+            )
+            for it in items:
+                self._log(f"    [elem] {it}")
+        except Exception as exc:
+            self._log(f"    (não consegui listar elementos: {exc})")
+
+    def _set_story_file(self, image_path: str) -> bool:
+        """Envia a imagem do story para um <input type=file> da página."""
+        try:
+            inputs = self._page.query_selector_all("input[type='file']")
+        except Exception:
+            inputs = []
+        for inp in inputs:
+            try:
+                accept = (inp.get_attribute("accept") or "").lower()
+                if accept and "image" not in accept and "video" not in accept:
+                    continue
+                inp.set_input_files(image_path)
+                self._log("  Imagem enviada ao campo de upload.")
+                return True
+            except Exception:
+                continue
+        return False
+
+    def post_story_web(
+        self, image_path: str, link: str = "", caption: str = ""
+    ) -> dict:
+        """Publica um story pela interface web (mobile) com sticker de link.
+
+        Retorna {'ok': bool, 'step': str, 'detail': str}.
+        """
+        stats = {"ok": False, "step": "init", "detail": ""}
+        self._log("Postando story pelo navegador (web) com sticker de link...")
+
+        if not self._ensure_page():
+            self._log("Sem aba do Chrome. Clique em 'Conectar Bot' primeiro.")
+            stats["detail"] = "sem aba"
+            return stats
+
+        cdp = self._enable_mobile()
+        try:
+            stats["step"] = "open"
+            self._page.goto(
+                "https://www.instagram.com/",
+                wait_until="domcontentloaded",
+                timeout=45000,
+            )
+            self._page.wait_for_timeout(3500)
+
+            # 1) Abrir o fluxo de criar story.
+            self._log("  Abrindo criador de story...")
+            self._click_by_text(
+                ["criar", "create", "nova publicação", "new post"]
+            )
+            self._page.wait_for_timeout(1500)
+            self._click_by_text(
+                ["story", "stories", "história", "historia"]
+            )
+            self._page.wait_for_timeout(1500)
+
+            # 2) Enviar a imagem.
+            stats["step"] = "upload"
+            if not self._set_story_file(image_path):
+                # Pode haver um botão que dispara o seletor de arquivo.
+                self._click_by_text(
+                    ["adicionar", "selecionar", "upload", "computador",
+                     "selecionar do computador"]
+                )
+                self._page.wait_for_timeout(1200)
+            if not self._set_story_file(image_path):
+                self._log(
+                    "  Não encontrei o campo de upload do story. "
+                    "Elementos visíveis abaixo (me envie pra eu ajustar):"
+                )
+                self._dump_clickables()
+                stats["detail"] = "upload nao encontrado"
+                return stats
+            self._page.wait_for_timeout(3500)
+
+            # 3) Adicionar o sticker de link.
+            if link:
+                stats["step"] = "sticker"
+                self._add_link_sticker(link)
+
+            # 4) Publicar.
+            stats["step"] = "share"
+            self._log("  Publicando story...")
+            shared = self._click_by_text(
+                ["adicionar à sua história", "adicionar a sua historia",
+                 "compartilhar", "share", "add to story", "publicar",
+                 "concluir", "enviar"]
+            )
+            if not shared:
+                self._log(
+                    "  Não achei o botão de publicar. "
+                    "Elementos visíveis abaixo (me envie pra eu ajustar):"
+                )
+                self._dump_clickables()
+                stats["detail"] = "botao publicar nao encontrado"
+                return stats
+            self._page.wait_for_timeout(4000)
+            self._log("Story publicado pelo navegador (verifique no app).")
+            stats["ok"] = True
+            stats["step"] = "done"
+            return stats
+        except Exception as exc:
+            self._log(f"  Erro ao postar story (web): {exc}")
+            stats["detail"] = str(exc)
+            return stats
+        finally:
+            self._disable_mobile(cdp)
+
+    def _add_link_sticker(self, link: str) -> bool:
+        """No editor de story, adiciona o sticker de link com a URL."""
+        self._log(f"  Adicionando sticker de link: {link}")
+        # Abre a barra de stickers/adesivos.
+        self._click_by_text(
+            ["sticker", "stickers", "adesivo", "adesivos", "figurinha",
+             "figurinhas"]
+        )
+        self._page.wait_for_timeout(1200)
+        # Escolhe a opção "Link".
+        opened = self._click_by_text(["link", "links"])
+        self._page.wait_for_timeout(1000)
+        if not opened:
+            self._log(
+                "  Não achei o sticker 'Link'. Elementos visíveis abaixo:"
+            )
+            self._dump_clickables()
+            return False
+        # Digita a URL no campo que apareceu.
+        typed = False
+        try:
+            field = self._page.query_selector(
+                "input[type='url'], input[type='text'], "
+                "input[placeholder], textarea, [contenteditable='true']"
+            )
+            if field:
+                field.click()
+                self._page.wait_for_timeout(300)
+                try:
+                    field.fill(link)
+                except Exception:
+                    self._page.keyboard.type(link)
+                typed = True
+        except Exception:
+            pass
+        if not typed:
+            try:
+                self._page.keyboard.type(link)
+                typed = True
+            except Exception:
+                pass
+        self._page.wait_for_timeout(800)
+        # Confirma o sticker.
+        self._click_by_text(
+            ["concluir", "concluído", "concluido", "done", "ok", "pronto",
+             "adicionar"]
+        )
+        self._page.wait_for_timeout(1000)
+        return typed
 
     def hide_story_via_settings(
         self, allowed_username: str, my_username: str = ""

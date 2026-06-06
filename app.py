@@ -1567,9 +1567,13 @@ class App(ctk.CTk):
 
     def _post_product_to_instagram(self, product: dict) -> bool:
         """Posta um produto no Instagram. Retorna True se OK."""
-        if not self._api:
+        post_type = self.post_type_var.get()
+        # Story com sticker vai pelo navegador (bot); só o feed/reserva
+        # exige a API. Sem bot e sem API não dá pra postar story.
+        if not self._api and not (post_type == "story" and self._bot):
             self._safe_offers_log(
-                "API não conectada! Configure o token na aba Dashboard."
+                "Conecte o Bot (story c/ sticker) ou configure o token "
+                "da API na aba Dashboard."
             )
             return False
 
@@ -1582,12 +1586,53 @@ class App(ctk.CTk):
 
         affiliate_link = self._resolve_affiliate_link(product)
 
-        post_type = self.post_type_var.get()
         title = product.get("title", "")[:50]
 
         try:
             if post_type == "story":
                 self._safe_offers_log(f"Montando story: {title}...")
+                # Sem texto de link na imagem: o link vai no sticker clicável.
+                build_story_image(
+                    STORY_BG_PATH,
+                    STORY_OUT_PATH,
+                    product_image_url=image_url,
+                    link="",
+                    font_regular=FONT_REGULAR,
+                    font_bold=FONT_BOLD,
+                )
+
+                # Caminho preferido: postar pelo navegador (web) com
+                # sticker de link clicável (meli.la). A Graph API não
+                # suporta stickers.
+                if self._bot is not None:
+                    res = self._bot.post_story_web(
+                        STORY_OUT_PATH, link=affiliate_link
+                    )
+                    if res.get("ok"):
+                        self._safe_offers_log(
+                            "Story com sticker de link publicado!"
+                        )
+                        return True
+                    self._safe_offers_log(
+                        "Falha no story via navegador "
+                        f"(passo: {res.get('step')}). Publicando via API "
+                        "(link em texto na imagem) como reserva."
+                    )
+                else:
+                    self._safe_offers_log(
+                        "Bot não conectado — sem sticker. Clique em "
+                        "'Conectar Bot' para o sticker de link. "
+                        "Publicando via API (link em texto) por enquanto."
+                    )
+
+                # Reserva: recompõe com o link em texto e publica via API.
+                if not self._api:
+                    self._safe_offers_log(
+                        "Sem API para a reserva. Configure o token na aba "
+                        "Dashboard ou me envie o log acima p/ ajustar o "
+                        "fluxo do sticker."
+                    )
+                    return False
                 build_story_image(
                     STORY_BG_PATH,
                     STORY_OUT_PATH,
@@ -1596,7 +1641,7 @@ class App(ctk.CTk):
                     font_regular=FONT_REGULAR,
                     font_bold=FONT_BOLD,
                 )
-                self._safe_offers_log(f"Postando story: {title}...")
+                self._safe_offers_log(f"Postando story (reserva): {title}...")
                 result = self._api.publish_story_image(STORY_OUT_PATH)
             else:
                 caption = format_instagram_caption(product, affiliate_link)
