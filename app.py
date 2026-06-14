@@ -837,15 +837,25 @@ class App(ctk.CTk):
             variable=self.post_type_var, value="story",
         ).pack(side="left")
 
-        # ── Lista de ofertas encontradas ──────────────────────────────────
-        self.offers_listbox = ctk.CTkTextbox(
-            tab, width=660, height=120, state="disabled",
-        )
-        self.offers_listbox.pack(padx=10, pady=(2, 2))
+        # ── Ofertas (esquerda) + Log (direita), lado a lado ───────────────
+        panes = ctk.CTkFrame(tab, fg_color="transparent")
+        panes.pack(padx=10, pady=(4, 8), fill="both", expand=True)
 
-        # ── Log ──────────────────────────────────────────────────────────
-        log_header = ctk.CTkFrame(tab, fg_color="transparent")
-        log_header.pack(padx=10, pady=(2, 0), fill="x")
+        # Coluna esquerda: ofertas
+        left_col = ctk.CTkFrame(panes, fg_color="transparent")
+        left_col.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        ctk.CTkLabel(
+            left_col, text="Ofertas encontradas:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w")
+        self.offers_listbox = ctk.CTkTextbox(left_col, state="disabled")
+        self.offers_listbox.pack(fill="both", expand=True, pady=(2, 0))
+
+        # Coluna direita: log
+        right_col = ctk.CTkFrame(panes, fg_color="transparent")
+        right_col.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        log_header = ctk.CTkFrame(right_col, fg_color="transparent")
+        log_header.pack(fill="x")
         ctk.CTkLabel(
             log_header, text="Log:", font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(side="left")
@@ -859,14 +869,8 @@ class App(ctk.CTk):
             width=70, height=26, font=ctk.CTkFont(size=11),
             fg_color="#9E9E9E", hover_color="#757575",
         ).pack(side="right", padx=(0, 6))
-
-        self.offers_log_box = ctk.CTkTextbox(
-            tab, width=660, height=240, state="disabled"
-        )
-        # Cresce junto com a janela (maximizada) pra facilitar ler/copiar.
-        self.offers_log_box.pack(
-            padx=10, pady=(2, 6), fill="both", expand=True
-        )
+        self.offers_log_box = ctk.CTkTextbox(right_col, state="disabled")
+        self.offers_log_box.pack(fill="both", expand=True, pady=(2, 0))
 
         # Dados internos
         self._current_product: dict | None = None

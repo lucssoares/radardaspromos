@@ -28,6 +28,17 @@ except ImportError:
 IG_PKG = "com.instagram.android"
 IG_ACTIVITY = "com.instagram.mainactivity.LauncherActivity"
 
+# resource-ids reais do editor de story (descobertos via diagnóstico).
+_RID_ASSET = f"{IG_PKG}:id/asset_button"          # Figurinhas (stickers)
+_RID_TEXT = f"{IG_PKG}:id/add_text_button"        # Texto
+_RID_MUSIC = f"{IG_PKG}:id/music_button"          # Músicas
+_RID_OVERFLOW = f"{IG_PKG}:id/overflow_button"    # Mostrar mais ferramentas
+_RID_CAPTION = f"{IG_PKG}:id/add_caption_textview"
+_RID_SHARE_BAR = f"{IG_PKG}:id/story_share_controls_action_bar"
+_RID_GALLERY_THUMB = f"{IG_PKG}:id/gallery_grid_item_thumbnail"
+# Marcadores que confirmam que estamos no EDITOR de story.
+_EDITOR_RIDS = [_RID_ASSET, _RID_TEXT, _RID_MUSIC, _RID_CAPTION, _RID_SHARE_BAR]
+
 # Candidatos de texto/content-desc (PT + EN) pra cada passo.
 # O bot tenta todos em ordem; o primeiro que existir na tela é clicado.
 _CREATE_LABELS = ["nova publicação", "new post", "criar", "create"]
@@ -165,31 +176,34 @@ class AndroidStoryPoster:
         except Exception as exc:
             self._log(f"  [intent] falhou: {exc}")
             return False
-        time.sleep(5)
-        return self._in_story_editor()
+        # O editor pode demorar a montar; espera por ele aparecer.
+        return self._wait_story_editor(timeout=12)
 
     def _in_story_editor(self) -> bool:
-        """Detecta se estamos no editor de story (ferramentas visíveis)."""
-        markers = ["adesivo", "sticker", "figurinha", "desenhar", "draw"]
-        for lbl in markers:
+        """Detecta o editor de story pelos resource-ids reais dos botões."""
+        for rid in _EDITOR_RIDS:
             try:
-                if (self.d(descriptionContains=lbl).exists
-                        or self.d(textContains=lbl).exists):
+                if self.d(resourceId=rid).exists:
                     return True
             except Exception:
                 pass
-        # Editor também mostra os botões de publicar "Seu story"/
-        # "Adicionar à sua história" SEM a barra de navegação do feed.
-        share_like = ["adicionar à sua história", "add to your story"]
-        feed_nav = ["feed inicial", "página inicial", "home feed"]
-        has_share = any(
-            self.d(textContains=s).exists or self.d(descriptionContains=s).exists
-            for s in share_like
-        )
-        on_feed = any(
-            self.d(descriptionContains=f).exists for f in feed_nav
-        )
-        return has_share and not on_feed
+        # Reforço por texto (algumas versões).
+        for lbl in ["figurinhas", "reestilizar"]:
+            try:
+                if self.d(textContains=lbl).exists:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _wait_story_editor(self, timeout: float = 12.0) -> bool:
+        """Espera o editor de story aparecer (polling)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._in_story_editor():
+                return True
+            time.sleep(0.6)
+        return False
 
     def _allow_media_permission(self) -> None:
         """Libera o pop-up de permissão de fotos do Instagram, se aparecer."""
@@ -470,45 +484,27 @@ class AndroidStoryPoster:
             pass
         self._allow_media_permission()
 
-        # Se houver um botão "Galeria" ou "Gallery", clica.
-        self._find_and_click(
-            _GALLERY_LABELS, "galeria", timeout=4, dump_on_fail=False
-        )
-        time.sleep(1.5)
-
-        # Seleciona a primeira imagem (geralmente um ImageView clicável).
+        # A imagem que enviamos é a mais recente → primeiro item do grid.
         try:
-            images = self.d(
-                className="android.widget.ImageView", clickable=True
-            )
-            if images.exists:
-                images[0].click()
-                self._log("  [galeria] primeira imagem selecionada.")
-                time.sleep(2)
-                return True
-        except Exception:
-            pass
-
-        # Plano B: tenta resource-id do grid de mídia do IG.
-        try:
-            grid = self.d(resourceIdMatches=".*gallery.*|.*media.*|.*grid.*")
-            if grid.exists:
-                grid[0].click()
-                self._log("  [galeria] imagem selecionada (resource-id).")
-                time.sleep(2)
-                return True
-        except Exception:
-            pass
-
-        # Tenta "Avançar"/"Next" se a imagem já está selecionada.
-        if self._find_and_click(
-            _NEXT_LABELS, "next", timeout=3, dump_on_fail=False
-        ):
-            time.sleep(1.5)
-            return True
+            thumbs = self.d(resourceId=_RID_GALLERY_THUMB)
+            if thumbs.exists:
+                thumbs[0].click()
+                self._log(
+                    "  [galeria] miniatura mais recente selecionada."
+                )
+                if self._wait_story_editor(timeout=10):
+                    return True
+                # Algumas versões pedem 'Avançar' depois de selecionar.
+                self._find_and_click(
+                    _NEXT_LABELS, "next", timeout=3, dump_on_fail=False
+                )
+                if self._wait_story_editor(timeout=8):
+                    return True
+        except Exception as exc:
+            self._log(f"  [galeria] erro ao tocar miniatura: {exc}")
 
         self._log(
-            "  [galeria] Não selecionei imagem. Textos na tela:"
+            "  [galeria] Não cheguei no editor. Tela atual:"
         )
         self._log(self.dump_state("pick_image"))
         return False
@@ -517,62 +513,124 @@ class AndroidStoryPoster:
         """No editor de story, adiciona sticker de link com a URL."""
         self._log(f"  Adicionando sticker de link: {link}")
 
-        # Abre a barra de stickers.
-        if not self._find_and_click(
-            _STICKER_LABELS, "stickers", timeout=6
-        ):
+        # 1) Abre a bandeja de figurinhas pelo botão real (asset_button).
+        opened = False
+        try:
+            btn = self.d(resourceId=_RID_ASSET)
+            if btn.exists:
+                btn.click()
+                opened = True
+                self._log("  [sticker] abri Figurinhas (asset_button).")
+        except Exception:
+            pass
+        if not opened:
+            opened = self._find_and_click(
+                _STICKER_LABELS, "stickers", timeout=5, dump_on_fail=False
+            )
+        if not opened:
+            self._log("  [sticker] não achei o botão Figurinhas. Tela:")
+            self._log(self.dump_state("sticker_btn"))
             return False
-        time.sleep(1.5)
+        time.sleep(2)
 
-        # Procura e clica no sticker "Link".
-        if not self._find_and_click(
-            _LINK_LABELS, "link_sticker", timeout=5
-        ):
+        # 2) Dump da bandeja (pra eu ver onde está a figurinha 'Link').
+        self._log("  [diag bandeja de figurinhas]:")
+        self._log(self.dump_state("sticker_tray"))
+
+        # 3) Tenta filtrar pela busca, se houver.
+        try:
+            search = self.d(className="android.widget.EditText")
+            if search.exists:
+                search.click()
+                time.sleep(0.4)
+                search.set_text("link")
+                time.sleep(1.2)
+        except Exception:
+            pass
+
+        # 4) Clica na figurinha 'Link' (texto ou content-desc).
+        clicked_link = False
+        for q in ["LINK", "Link", "link"]:
+            try:
+                el = self.d(text=q)
+                if el.exists:
+                    el.click()
+                    clicked_link = True
+                    break
+                el = self.d(descriptionContains=q)
+                if el.exists:
+                    el.click()
+                    clicked_link = True
+                    break
+            except Exception:
+                pass
+        if not clicked_link:
+            clicked_link = self._find_and_click(
+                _LINK_LABELS, "link_sticker", timeout=4, dump_on_fail=True
+            )
+        if not clicked_link:
             return False
-        time.sleep(1.5)
+        time.sleep(1.8)
 
-        # Digita a URL no campo que apareceu.
+        # 5) Digita a URL no campo que aparece.
         typed = False
         try:
             field = self.d(className="android.widget.EditText")
             if field.exists:
                 field.click()
-                time.sleep(0.5)
+                time.sleep(0.4)
                 field.set_text(link)
                 typed = True
-                self._log(f"  URL digitada: {link}")
+                self._log(f"  [sticker] URL digitada: {link}")
         except Exception:
             pass
-
         if not typed:
             try:
                 self.d.send_keys(link)
                 typed = True
             except Exception:
                 pass
-
         if not typed:
-            self._log("  Não consegui digitar a URL.")
+            self._log("  [sticker] não consegui digitar a URL. Tela:")
             self._log(self.dump_state("type_url"))
             return False
-
         time.sleep(0.8)
 
-        # Confirma o sticker (botão "Concluído"/"Done").
+        # 6) Confirma (Concluído/Done) e posiciona a figurinha.
         self._find_and_click(
             _DONE_LABELS, "confirmar_link", timeout=5, dump_on_fail=True
         )
         time.sleep(1.5)
-        self._log("  Sticker de link adicionado.")
+        self._log("  [sticker] sticker de link adicionado.")
         return True
 
     def _share_story(self) -> bool:
-        """Clica no botão de compartilhar/publicar o story."""
+        """Publica o story clicando em 'Seus stories' (barra inferior)."""
+        # Botão principal: 'Seus stories' (publica no seu story).
+        for q in ["Seus stories", "Seu story", "Your story", "Your stories"]:
+            try:
+                el = self.d(textContains=q)
+                if not el.exists:
+                    el = self.d(descriptionContains=q)
+                if el.exists:
+                    el.click()
+                    self._log(f"  [compartilhar] cliquei em '{q}'.")
+                    time.sleep(5)
+                    # Possível confirmação extra.
+                    self._find_and_click(
+                        ["compartilhar", "share", "concluído", "ok"],
+                        "confirmar", timeout=3, dump_on_fail=False,
+                    )
+                    time.sleep(3)
+                    return True
+            except Exception:
+                pass
+
+        # Reforço: rótulos genéricos de compartilhar.
         if self._find_and_click(
-            _SHARE_LABELS, "compartilhar", timeout=8
+            _SHARE_LABELS, "compartilhar", timeout=6
         ):
             time.sleep(4)
-            # Pode ter um segundo passo (confirmar "Seu story").
             self._find_and_click(
                 _SHARE_LABELS, "confirmar", timeout=4, dump_on_fail=False
             )
