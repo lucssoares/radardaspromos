@@ -73,7 +73,14 @@ class App(ctk.CTk):
         super().__init__()
         self.title("Instagram Auto-Follow Bot")
         self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
-        self.resizable(False, False)
+        # Janela redimensionável (antes era fixa e cortava em telas menores).
+        self.resizable(True, True)
+        self.minsize(640, 480)
+        # Tenta abrir maximizada (Windows/alguns WMs); ignora se não suportado.
+        try:
+            self.after(80, lambda: self.state("zoomed"))
+        except Exception:
+            pass
 
         self._bot: InstagramBot | None = None
         self._chrome_process = None

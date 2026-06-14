@@ -87,7 +87,11 @@ class AndroidStoryPoster:
     # ── Imagem → galeria ─────────────────────────────────────────────────
     def push_image(self, local_path: str) -> str:
         """Envia a imagem pro dispositivo e registra no MediaStore."""
-        name = os.path.basename(local_path) or "radar_story.jpg"
+        base = os.path.basename(local_path) or "radar_story.jpg"
+        root, ext = os.path.splitext(base)
+        # Nome único por postagem: evita pegar um _id antigo do MediaStore
+        # quando o mesmo nome já foi enviado em postagens anteriores.
+        name = f"{root}_{int(time.time())}{ext or '.jpg'}"
         remote = f"/sdcard/Pictures/{name}"
         self.d.push(local_path, remote)
         self.d.shell(
@@ -96,6 +100,60 @@ class AndroidStoryPoster:
         )
         self._log(f"  Imagem enviada ao dispositivo: {remote}")
         return remote
+
+    def _media_id(self, remote: str) -> str | None:
+        """Descobre o _id do MediaStore da imagem (pra montar a URI)."""
+        name = os.path.basename(remote)
+        try:
+            out = self.d.shell(
+                "content query --uri content://media/external/images/media "
+                "--projection _id "
+                f"--where \"_display_name='{name}'\""
+            )
+            text = out[0] if isinstance(out, (list, tuple)) else str(out)
+            ids = re.findall(r"_id=(\d+)", text)
+            if ids:
+                return ids[-1]  # o mais recente (última inserção)
+        except Exception as exc:
+            self._log(f"  [intent] não obtive media id: {exc}")
+        return None
+
+    def _open_story_via_intent(self, remote: str) -> bool:
+        """Abre o editor de story já com a imagem (intent ADD_TO_STORY).
+
+        É bem mais confiável que navegar pela galeria: o Instagram abre
+        direto no editor com a imagem como fundo.
+        """
+        mid = self._media_id(remote)
+        if not mid:
+            self._log("  [intent] sem media id; vou tentar pela interface.")
+            return False
+        uri = f"content://media/external/images/media/{mid}"
+        try:
+            self.d.shell(
+                "am start -a com.instagram.share.ADD_TO_STORY "
+                "-t image/jpeg "
+                f"-d {uri} "
+                "--es source_application com.radardaspromos "
+                "--grant-read-uri-permission"
+            )
+        except Exception as exc:
+            self._log(f"  [intent] falhou: {exc}")
+            return False
+        time.sleep(5)
+        return self._in_story_editor()
+
+    def _in_story_editor(self) -> bool:
+        """Detecta se estamos no editor de story (ferramentas visíveis)."""
+        markers = ["adesivo", "sticker", "figurinha", "desenhar", "draw"]
+        for lbl in markers:
+            try:
+                if (self.d(descriptionContains=lbl).exists
+                        or self.d(textContains=lbl).exists):
+                    return True
+            except Exception:
+                pass
+        return False
 
     # ── Diagnóstico ──────────────────────────────────────────────────────
     def dump_state(self, label: str = "diag") -> str:
@@ -196,35 +254,43 @@ class AndroidStoryPoster:
         # 1) Enviar imagem pra galeria do dispositivo.
         stats["step"] = "push_image"
         try:
-            self.push_image(image_path)
+            remote = self.push_image(image_path)
         except Exception as exc:
             stats["detail"] = f"push falhou: {exc}"
             self._log(f"  Erro ao enviar imagem: {exc}")
             return stats
         time.sleep(1)
 
-        # 2) Abrir o Instagram.
-        stats["step"] = "open_ig"
-        try:
-            self.d.app_start(IG_PKG, activity=IG_ACTIVITY, stop=False)
-            self._log("  Instagram aberto.")
-            time.sleep(3)
-        except Exception as exc:
-            stats["detail"] = f"app_start falhou: {exc}"
-            self._log(f"  Erro ao abrir Instagram: {exc}")
-            return stats
+        # 2) Carregar a imagem no editor de story.
+        # Caminho A (mais confiável): intent ADD_TO_STORY com a imagem.
+        stats["step"] = "open_story"
+        if self._open_story_via_intent(remote):
+            self._log(
+                "  Editor de story aberto via intent (imagem carregada)."
+            )
+        else:
+            # Caminho B: abrir o app e navegar pela interface.
+            self._log(
+                "  Intent não abriu o editor; tentando pela interface..."
+            )
+            try:
+                self.d.app_start(IG_PKG, activity=IG_ACTIVITY, stop=False)
+                self._log("  Instagram aberto.")
+                time.sleep(3)
+            except Exception as exc:
+                stats["detail"] = f"app_start falhou: {exc}"
+                self._log(f"  Erro ao abrir Instagram: {exc}")
+                return stats
 
-        # 3) Ir pra tela de criar story.
-        stats["step"] = "create"
-        if not self._open_story_composer():
-            stats["detail"] = "não abriu o composer de story"
-            return stats
+            stats["step"] = "create"
+            if not self._open_story_composer():
+                stats["detail"] = "não abriu o composer de story"
+                return stats
 
-        # 4) Selecionar a imagem da galeria.
-        stats["step"] = "pick_image"
-        if not self._pick_gallery_image():
-            stats["detail"] = "não selecionou imagem da galeria"
-            return stats
+            stats["step"] = "pick_image"
+            if not self._pick_gallery_image():
+                stats["detail"] = "não selecionou imagem da galeria"
+                return stats
 
         # 5) Adicionar sticker de link (se fornecido).
         if link:
@@ -249,24 +315,24 @@ class AndroidStoryPoster:
 
     # ── Sub-steps ────────────────────────────────────────────────────────
     def _open_story_composer(self) -> bool:
-        """Navega: home → criar (+) → Story."""
-        # Tenta o botão "+" de criar (bottom nav ou top).
-        self._find_and_click(
-            _CREATE_LABELS, "criar", timeout=6, dump_on_fail=False
-        )
-        time.sleep(1.5)
-
-        # Tenta clicar em "Story" no menu que abriu.
+        """Navega até a tela de criar story."""
+        # Caminho confirmado no diagnóstico: avatar "Adicionar ao story".
+        primary = ["adicionar ao story", "add to story",
+                   "add to your story", "seu story", "your story"]
         if self._find_and_click(
-            _STORY_LABELS, "story", timeout=5, dump_on_fail=False
+            primary, "seu_story", timeout=5, dump_on_fail=False
         ):
             time.sleep(2)
             return True
 
-        # Plano B: clicar no avatar "Seu story" no topo do feed.
-        alt = ["seu story", "your story", "adicionar ao story",
-               "add to story", "add to your story"]
-        if self._find_and_click(alt, "seu_story", timeout=4):
+        # Alternativa: botão "+" de criar e depois "Story".
+        self._find_and_click(
+            _CREATE_LABELS, "criar", timeout=6, dump_on_fail=False
+        )
+        time.sleep(1.5)
+        if self._find_and_click(
+            _STORY_LABELS, "story", timeout=5, dump_on_fail=False
+        ):
             time.sleep(2)
             return True
 
