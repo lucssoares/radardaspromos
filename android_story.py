@@ -241,6 +241,28 @@ class AndroidStoryPoster:
                     lines.append(n)
                     if len(lines) > 50:
                         break
+            # Lista os elementos CLICÁVEIS com resource-id/classe — ajuda a
+            # achar botões que são só ícone (sem texto), como o do sticker.
+            lines.append("--- clicáveis (id | desc | classe) ---")
+            clicks = re.findall(r"<node[^>]*clickable=\"true\"[^>]*>", xml)
+            cseen = set()
+            for node in clicks:
+                rid = re.search(r'resource-id="([^"]*)"', node)
+                desc = re.search(r'content-desc="([^"]*)"', node)
+                txt = re.search(r'\btext="([^"]*)"', node)
+                cls = re.search(r'class="([^"]*)"', node)
+                rid_v = rid.group(1) if rid else ""
+                desc_v = (desc.group(1) if desc else "") or (
+                    txt.group(1) if txt else "")
+                cls_v = (cls.group(1) if cls else "").split(".")[-1]
+                key = f"{rid_v}|{desc_v}|{cls_v}"
+                if key in cseen:
+                    continue
+                cseen.add(key)
+                rid_short = rid_v.split("/")[-1] if rid_v else "-"
+                lines.append(f"  • {rid_short} | {desc_v or '-'} | {cls_v}")
+                if len(cseen) > 40:
+                    break
         except Exception as exc:
             lines.append(f"(erro dump: {exc})")
         return "\n".join(lines)
@@ -346,10 +368,18 @@ class AndroidStoryPoster:
                 stats["detail"] = "não abriu o composer de story"
                 return stats
 
+            # Dump da câmera de story (pra eu ver onde fica a galeria).
+            self._log("  [diag câmera de story]:")
+            self._log(self.dump_state("camera"))
+
             stats["step"] = "pick_image"
             if not self._pick_gallery_image():
                 stats["detail"] = "não selecionou imagem da galeria"
                 return stats
+
+            # Dump do editor (pra eu achar o botão de sticker).
+            self._log("  [diag editor de story]:")
+            self._log(self.dump_state("editor"))
 
         # 5) Adicionar sticker de link (se fornecido).
         if link:
@@ -374,31 +404,53 @@ class AndroidStoryPoster:
 
     # ── Sub-steps ────────────────────────────────────────────────────────
     def _open_story_composer(self) -> bool:
-        """Navega até a tela de criar story."""
-        # Caminho confirmado no diagnóstico: avatar "Adicionar ao story".
-        primary = ["adicionar ao story", "add to story",
-                   "add to your story", "seu story", "your story"]
-        if self._find_and_click(
-            primary, "seu_story", timeout=5, dump_on_fail=False
-        ):
-            time.sleep(2)
-            return True
+        """Abre a CÂMERA de criar story (e não o visualizador).
 
-        # Alternativa: botão "+" de criar e depois "Story".
-        self._find_and_click(
-            _CREATE_LABELS, "criar", timeout=6, dump_on_fail=False
+        Usa o botão exato 'Adicionar ao story' do topo do feed — clicar em
+        'stories' genérico abria o visualizador (Turbinar/Destacar/etc.).
+        """
+        # Garante que estamos no feed (onde fica 'Adicionar ao story').
+        try:
+            self.d(descriptionContains="Página inicial").click_exists(
+                timeout=3
+            )
+        except Exception:
+            pass
+        time.sleep(1.2)
+
+        # Espera o feed carregar o botão de adicionar story.
+        self._wait_for_any(
+            ["Adicionar ao story", "Add to story", "Seu story"], timeout=8
         )
-        time.sleep(1.5)
-        if self._find_and_click(
-            _STORY_LABELS, "story", timeout=5, dump_on_fail=False
-        ):
-            time.sleep(2)
-            return True
 
-        # Se nada funcionou, mostra diagnóstico.
+        # Clica EXATAMENTE no 'Adicionar ao story' (abre a câmera/editor).
+        exact_desc = [
+            "Adicionar ao story", "Add to story", "Add to your story",
+        ]
+        for desc in exact_desc:
+            try:
+                el = self.d(description=desc)
+                if el.exists:
+                    el.click()
+                    self._log(f"  [criar] cliquei (exato): '{desc}'")
+                    time.sleep(2.5)
+                    return True
+            except Exception:
+                pass
+
+        # Plano B: o avatar 'Seu story' (também abre a câmera).
+        try:
+            el = self.d(textContains="Seu story")
+            if el.exists:
+                el.click()
+                self._log("  [criar] cliquei em 'Seu story'.")
+                time.sleep(2.5)
+                return True
+        except Exception:
+            pass
+
         self._log(
-            "  [criar] Não encontrei entrada pra story. "
-            "Textos na tela:"
+            "  [criar] Não encontrei 'Adicionar ao story'. Tela atual:"
         )
         self._log(self.dump_state("create_story"))
         return False

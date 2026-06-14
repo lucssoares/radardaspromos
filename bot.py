@@ -1447,15 +1447,16 @@ class InstagramBot:
                 "Não há aba do Chrome disponível. Clique em 'Conectar Bot'."
             )
 
-        # Precisa estar no domínio do ML (same-origin) p/ enviar cookies/csrf.
+        # Precisa estar na página do Linkbuilder (afiliado) p/ ter o token
+        # CSRF e os cookies da sessão. Sempre navega pra lá antes de gerar.
         cur = (self._page.url or "").lower()
-        if "mercadolivre.com.br" not in cur:
+        if "afiliados/linkbuilder" not in cur:
             self._page.goto(
                 "https://www.mercadolivre.com.br/afiliados/linkbuilder",
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            self._page.wait_for_timeout(1500)
+            self._page.wait_for_timeout(2000)
 
         result = self._page.evaluate(
             """async (args) => {

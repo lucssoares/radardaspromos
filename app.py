@@ -827,7 +827,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 8))
 
-        self.post_type_var = ctk.StringVar(value="feed")
+        self.post_type_var = ctk.StringVar(value="story")
         ctk.CTkRadioButton(
             post_type_frame, text="Feed",
             variable=self.post_type_var, value="feed",
@@ -844,6 +844,22 @@ class App(ctk.CTk):
         self.offers_listbox.pack(padx=10, pady=(2, 2))
 
         # ── Log ──────────────────────────────────────────────────────────
+        log_header = ctk.CTkFrame(tab, fg_color="transparent")
+        log_header.pack(padx=10, pady=(2, 0), fill="x")
+        ctk.CTkLabel(
+            log_header, text="Log:", font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkButton(
+            log_header, text="Copiar Log", command=self._copy_offers_log,
+            width=90, height=26, font=ctk.CTkFont(size=11),
+            fg_color="#607D8B", hover_color="#455A64",
+        ).pack(side="right")
+        ctk.CTkButton(
+            log_header, text="Limpar", command=self._clear_offers_log,
+            width=70, height=26, font=ctk.CTkFont(size=11),
+            fg_color="#9E9E9E", hover_color="#757575",
+        ).pack(side="right", padx=(0, 6))
+
         self.offers_log_box = ctk.CTkTextbox(
             tab, width=660, height=240, state="disabled"
         )
@@ -1511,6 +1527,22 @@ class App(ctk.CTk):
 
     def _safe_offers_log(self, msg: str) -> None:
         self.after(0, self._append_offers_log, msg)
+
+    def _copy_offers_log(self) -> None:
+        """Copia todo o log do Radar pra área de transferência."""
+        try:
+            content = self.offers_log_box.get("1.0", "end").strip()
+            self.clipboard_clear()
+            self.clipboard_append(content)
+            self._append_offers_log("[Log copiado para a área de transferência]")
+        except Exception as exc:
+            self._append_offers_log(f"[Erro ao copiar log: {exc}]")
+
+    def _clear_offers_log(self) -> None:
+        """Limpa o log do Radar."""
+        self.offers_log_box.configure(state="normal")
+        self.offers_log_box.delete("1.0", "end")
+        self.offers_log_box.configure(state="disabled")
 
     def _display_offers_list(self) -> None:
         """Exibe a lista de ofertas encontradas na listbox."""
