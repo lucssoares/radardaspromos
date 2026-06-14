@@ -665,34 +665,132 @@ class AndroidStoryPoster:
             canvas_h = h
         top = (h - canvas_h) / 2.0
         cx = int(w / 2)
-        src_y = int(top + canvas_h * 0.50)   # centro (onde a figurinha nasce)
-        dst_y = int(top + canvas_h * 0.86)    # parte inferior do story
-        moved = False
+
+        # Tenta achar a posição REAL da figurinha na árvore (a11y).
+        src_x, src_y = self._find_sticker_xy()
+        if src_x is None:
+            src_x, src_y = cx, int(top + canvas_h * 0.50)
+            self._log(
+                f"  [sticker] não localizei a figurinha; uso o centro "
+                f"({src_x},{src_y})."
+            )
+        else:
+            self._log(
+                f"  [sticker] figurinha localizada em ({src_x},{src_y})."
+            )
+        dst_x = cx
+        dst_y = int(top + canvas_h * 0.85)    # parte inferior do story
+
         # Gesto com HOLD inicial: a figurinha só é "pega" se segurarmos antes
-        # de arrastar; um drag rápido não move nada (foi o que aconteceu).
+        # de arrastar; um drag rápido não move nada.
+        moved = False
         try:
-            self.d.touch.down(cx, src_y)
-            time.sleep(0.6)
-            steps = 12
+            self.d.touch.down(src_x, src_y)
+            time.sleep(0.7)
+            steps = 14
             for i in range(1, steps + 1):
+                x = src_x + (dst_x - src_x) * i / steps
                 y = src_y + (dst_y - src_y) * i / steps
-                self.d.touch.move(cx, int(y))
+                self.d.touch.move(int(x), int(y))
                 time.sleep(0.05)
             time.sleep(0.3)
-            self.d.touch.up(cx, dst_y)
+            self.d.touch.up(dst_x, dst_y)
             moved = True
             self._log(
-                f"  [sticker] reposicionada p/ baixo (x={cx}, y={dst_y})."
+                f"  [sticker] arrastada p/ baixo -> ({dst_x},{dst_y})."
             )
         except Exception as exc:
             self._log(f"  [sticker] touch-drag falhou: {exc}")
         if not moved:
             try:
-                self.d.drag(cx, src_y, cx, dst_y, duration=1.2)
+                self.d.drag(src_x, src_y, dst_x, dst_y, duration=1.2)
                 self._log(f"  [sticker] reposicionada via drag (y={dst_y}).")
             except Exception as exc:
                 self._log(f"  [sticker] não reposicionei a figurinha: {exc}")
         time.sleep(1.2)
+
+        # Diagnóstico: lista nós com bounds (pra eu ver onde está a figurinha).
+        self._log("  [diag pós-reposição] nós com bounds:")
+        self._log(self._dump_bounds())
+
+    def _find_sticker_xy(self) -> tuple[int | None, int | None]:
+        """Acha o centro da figurinha de link na árvore de acessibilidade.
+
+        Procura um nó cujo content-desc remeta a link/figurinha e que NÃO
+        seja um botão de barra de ferramentas conhecido.
+        Retorna (x, y) do centro ou (None, None) se não achar.
+        """
+        skip_ids = (
+            "asset_button", "add_text_button", "music_button",
+            "overflow_button", "cancel_button", "add_caption_textview",
+            "story_share_controls_action_bar", "quick_capture_root_container",
+        )
+        try:
+            xml = self.d.dump_hierarchy()
+        except Exception:
+            return None, None
+        best = None
+        for m in re.finditer(r"<node\b[^>]*>", xml):
+            node = m.group(0)
+            desc = re.search(r'content-desc="([^"]*)"', node)
+            rid = re.search(r'resource-id="([^"]*)"', node)
+            bounds = re.search(
+                r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node
+            )
+            if not bounds:
+                continue
+            desc_v = (desc.group(1) if desc else "").lower()
+            rid_v = (rid.group(1) if rid else "").split("/")[-1]
+            if rid_v in skip_ids:
+                continue
+            looks_link = (
+                "figurinha de link" in desc_v
+                or "link sticker" in desc_v
+                or ("link" in desc_v and "figurinha" in desc_v)
+                or "meli.la" in desc_v
+                or "mercadolivre" in desc_v
+            )
+            if not looks_link:
+                continue
+            x1, y1, x2, y2 = (int(bounds.group(i)) for i in range(1, 5))
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            best = (cx, cy)
+            break
+        if best:
+            return best
+        return None, None
+
+    def _dump_bounds(self) -> str:
+        """Lista nós (desc/id + bounds) pra diagnosticar posições na tela."""
+        lines: list[str] = []
+        try:
+            xml = self.d.dump_hierarchy()
+        except Exception as exc:
+            return f"(erro dump bounds: {exc})"
+        seen = set()
+        for m in re.finditer(r"<node\b[^>]*>", xml):
+            node = m.group(0)
+            desc = re.search(r'content-desc="([^"]*)"', node)
+            txt = re.search(r'\btext="([^"]*)"', node)
+            rid = re.search(r'resource-id="([^"]*)"', node)
+            bounds = re.search(
+                r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node
+            )
+            label = (desc.group(1) if desc else "") or (
+                txt.group(1) if txt else "")
+            rid_v = (rid.group(1) if rid else "").split("/")[-1]
+            if not bounds or (not label and not rid_v):
+                continue
+            b = bounds.group(0).replace("bounds=", "").strip('"')
+            key = f"{rid_v}|{label}|{b}"
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"  • {rid_v or '-'} | {label or '-'} | {b}")
+            if len(lines) > 60:
+                break
+        return "\n".join(lines)
 
     def _share_story(self) -> bool:
         """Publica o story clicando em 'Seus stories' (barra inferior)."""
