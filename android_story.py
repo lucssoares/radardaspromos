@@ -642,7 +642,39 @@ class AndroidStoryPoster:
             return False
         time.sleep(2)
         self._log("  [sticker] sticker de link adicionado.")
+
+        # Reposiciona a figurinha: centralizada e ABAIXO da imagem do produto.
+        self._position_link_sticker()
         return True
+
+    def _position_link_sticker(self) -> None:
+        """Arrasta a figurinha p/ ficar centralizada e abaixo do produto.
+
+        A imagem do story é 9:16 (1080x1920). No editor ela fica centrada
+        verticalmente na tela. A figurinha nasce no centro; arrastamos ela
+        pra ~68% da altura do canvas (logo abaixo do card do produto, que
+        fica em torno do centro vertical da imagem).
+        """
+        try:
+            w, h = self.d.window_size()
+        except Exception as exc:
+            self._log(f"  [sticker] não obtive tamanho da tela: {exc}")
+            return
+        canvas_h = w * 16 / 9          # altura do story 9:16 na tela
+        if canvas_h > h:
+            canvas_h = h
+        top = (h - canvas_h) / 2.0
+        cx = int(w / 2)
+        src_y = int(top + canvas_h * 0.50)   # centro (onde a figurinha nasce)
+        dst_y = int(top + canvas_h * 0.68)    # abaixo do produto
+        try:
+            self.d.drag(cx, src_y, cx, dst_y, duration=0.6)
+            self._log(
+                f"  [sticker] reposicionada (centro x={cx}, y={dst_y})."
+            )
+        except Exception as exc:
+            self._log(f"  [sticker] não reposicionei a figurinha: {exc}")
+        time.sleep(1.2)
 
     def _share_story(self) -> bool:
         """Publica o story clicando em 'Seus stories' (barra inferior)."""
