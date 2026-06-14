@@ -79,10 +79,35 @@ class AndroidStoryPoster:
                 "getprop ro.build.version.release"
             )[0].strip()
             self._log(f"Android conectado (v{ver}).")
+            self._grant_media_permissions()
             return True
         except Exception as exc:
             self._log(f"Não consegui conectar ao Android: {exc}")
             return False
+
+    def _grant_media_permissions(self) -> None:
+        """Concede ao Instagram acesso às fotos/mídia (evita o bloqueio
+        'Permitir acesso a fotos e vídeos' que trava a galeria)."""
+        perms = [
+            "android.permission.READ_MEDIA_IMAGES",
+            "android.permission.READ_MEDIA_VIDEO",
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+        ]
+        granted = 0
+        for p in perms:
+            try:
+                out = self.d.shell(f"pm grant {IG_PKG} {p}")
+                txt = out[0] if isinstance(out, (list, tuple)) else str(out)
+                if "Exception" not in txt and "Error" not in txt:
+                    granted += 1
+            except Exception:
+                pass
+        if granted:
+            self._log(
+                f"  Permissões de mídia concedidas ao Instagram ({granted})."
+            )
 
     # ── Imagem → galeria ─────────────────────────────────────────────────
     def push_image(self, local_path: str) -> str:
@@ -153,7 +178,41 @@ class AndroidStoryPoster:
                     return True
             except Exception:
                 pass
-        return False
+        # Editor também mostra os botões de publicar "Seu story"/
+        # "Adicionar à sua história" SEM a barra de navegação do feed.
+        share_like = ["adicionar à sua história", "add to your story"]
+        feed_nav = ["feed inicial", "página inicial", "home feed"]
+        has_share = any(
+            self.d(textContains=s).exists or self.d(descriptionContains=s).exists
+            for s in share_like
+        )
+        on_feed = any(
+            self.d(descriptionContains=f).exists for f in feed_nav
+        )
+        return has_share and not on_feed
+
+    def _allow_media_permission(self) -> None:
+        """Libera o pop-up de permissão de fotos do Instagram, se aparecer."""
+        labels = [
+            "permitir o acesso", "permitir acesso", "permitir tudo",
+            "permitir", "allow all", "allow",
+        ]
+        for lbl in labels:
+            try:
+                el = self.d(textContains=lbl)
+                if el.exists:
+                    el.click()
+                    self._log(f"  [perm] liberei acesso: '{lbl}'")
+                    time.sleep(1.2)
+                    # Pode abrir o diálogo do sistema com outro 'Permitir'.
+                    for sysl in ["permitir", "allow"]:
+                        s = self.d(textContains=sysl)
+                        if s.exists:
+                            s.click()
+                            time.sleep(1.0)
+                    return
+            except Exception:
+                pass
 
     # ── Diagnóstico ──────────────────────────────────────────────────────
     def dump_state(self, label: str = "diag") -> str:
@@ -180,7 +239,7 @@ class AndroidStoryPoster:
                 if n and n not in seen:
                     seen.add(n)
                     lines.append(n)
-                    if len(lines) > 30:
+                    if len(lines) > 50:
                         break
         except Exception as exc:
             lines.append(f"(erro dump: {exc})")
@@ -346,9 +405,18 @@ class AndroidStoryPoster:
 
     def _pick_gallery_image(self) -> bool:
         """No composer, abre a galeria e seleciona a primeira imagem."""
-        # O composer geralmente já mostra a galeria embaixo.
-        # Tenta clicar no thumbnail da galeria (primeiro item recente).
         time.sleep(2)
+
+        # Se aparecer o pedido de permissão de fotos, libera.
+        self._allow_media_permission()
+
+        # Na câmera do story, deslizar pra cima abre a galeria completa.
+        try:
+            self.d.swipe_ext("up", scale=0.8)
+            time.sleep(1.2)
+        except Exception:
+            pass
+        self._allow_media_permission()
 
         # Se houver um botão "Galeria" ou "Gallery", clica.
         self._find_and_click(

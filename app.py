@@ -116,6 +116,32 @@ class App(ctk.CTk):
         """Envia uma tarefa para a worker thread."""
         self._task_queue.put(fn)
 
+    def _run_on_worker(self, fn):
+        """Executa fn() na worker thread (Playwright) e retorna o resultado.
+
+        Necessário quando estamos numa thread de postagem mas precisamos
+        chamar o Playwright, que só funciona na thread onde a página foi
+        criada (senão dá o erro 'Cannot switch to a different thread').
+        """
+        if threading.current_thread() is self._worker:
+            return fn()
+        result: dict = {}
+        done = threading.Event()
+
+        def _wrapper():
+            try:
+                result["value"] = fn()
+            except Exception as exc:  # noqa: BLE001
+                result["error"] = exc
+            finally:
+                done.set()
+
+        self._submit_task(_wrapper)
+        done.wait()
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
     # ── UI ────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
@@ -819,9 +845,12 @@ class App(ctk.CTk):
 
         # ── Log ──────────────────────────────────────────────────────────
         self.offers_log_box = ctk.CTkTextbox(
-            tab, width=660, height=100, state="disabled"
+            tab, width=660, height=240, state="disabled"
         )
-        self.offers_log_box.pack(padx=10, pady=(2, 6))
+        # Cresce junto com a janela (maximizada) pra facilitar ler/copiar.
+        self.offers_log_box.pack(
+            padx=10, pady=(2, 6), fill="both", expand=True
+        )
 
         # Dados internos
         self._current_product: dict | None = None
@@ -1654,7 +1683,9 @@ class App(ctk.CTk):
         if self._bot is not None:
             try:
                 self._safe_offers_log("Gerando link de afiliado (meli.la)...")
-                short = self._bot.create_affiliate_link(product_url)
+                short = self._run_on_worker(
+                    lambda: self._bot.create_affiliate_link(product_url)
+                )
                 if short:
                     self._safe_offers_log(f"Link de afiliado: {short}")
                     return short
