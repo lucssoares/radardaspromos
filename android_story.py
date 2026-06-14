@@ -666,14 +666,32 @@ class AndroidStoryPoster:
         top = (h - canvas_h) / 2.0
         cx = int(w / 2)
         src_y = int(top + canvas_h * 0.50)   # centro (onde a figurinha nasce)
-        dst_y = int(top + canvas_h * 0.68)    # abaixo do produto
+        dst_y = int(top + canvas_h * 0.86)    # parte inferior do story
+        moved = False
+        # Gesto com HOLD inicial: a figurinha só é "pega" se segurarmos antes
+        # de arrastar; um drag rápido não move nada (foi o que aconteceu).
         try:
-            self.d.drag(cx, src_y, cx, dst_y, duration=0.6)
+            self.d.touch.down(cx, src_y)
+            time.sleep(0.6)
+            steps = 12
+            for i in range(1, steps + 1):
+                y = src_y + (dst_y - src_y) * i / steps
+                self.d.touch.move(cx, int(y))
+                time.sleep(0.05)
+            time.sleep(0.3)
+            self.d.touch.up(cx, dst_y)
+            moved = True
             self._log(
-                f"  [sticker] reposicionada (centro x={cx}, y={dst_y})."
+                f"  [sticker] reposicionada p/ baixo (x={cx}, y={dst_y})."
             )
         except Exception as exc:
-            self._log(f"  [sticker] não reposicionei a figurinha: {exc}")
+            self._log(f"  [sticker] touch-drag falhou: {exc}")
+        if not moved:
+            try:
+                self.d.drag(cx, src_y, cx, dst_y, duration=1.2)
+                self._log(f"  [sticker] reposicionada via drag (y={dst_y}).")
+            except Exception as exc:
+                self._log(f"  [sticker] não reposicionei a figurinha: {exc}")
         time.sleep(1.2)
 
     def _share_story(self) -> bool:
