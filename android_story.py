@@ -547,74 +547,78 @@ class AndroidStoryPoster:
             return False
         time.sleep(2)
 
-        # 2) Dump da bandeja (pra eu ver onde está a figurinha 'Link').
-        self._log("  [diag bandeja de figurinhas]:")
-        self._log(self.dump_state("sticker_tray"))
-
-        # 3) Tenta filtrar pela busca, se houver.
-        try:
-            search = self.d(className="android.widget.EditText")
-            if search.exists:
-                search.click()
-                time.sleep(0.4)
-                search.set_text("link")
-                time.sleep(1.2)
-        except Exception:
-            pass
-
-        # 4) Clica na figurinha 'Link' (texto ou content-desc).
+        # 2) Clica DIRETO na figurinha de link (NÃO usar a busca — digitar na
+        #    busca colava a URL no lugar errado). A figurinha tem
+        #    resource-id 'sticker_sheet_redesign_item' e desc com 'link'.
+        sticker_id = f"{IG_PKG}:id/sticker_sheet_redesign_item"
         clicked_link = False
-        for q in ["LINK", "Link", "link"]:
+        for desc in [
+            "Figurinha de link", "Link sticker", "Adicionar link",
+        ]:
             try:
-                el = self.d(text=q)
+                el = self.d(resourceId=sticker_id, description=desc)
                 if el.exists:
                     el.click()
                     clicked_link = True
-                    break
-                el = self.d(descriptionContains=q)
-                if el.exists:
-                    el.click()
-                    clicked_link = True
+                    self._log(f"  [sticker] cliquei na figurinha '{desc}'.")
                     break
             except Exception:
                 pass
         if not clicked_link:
-            clicked_link = self._find_and_click(
-                _LINK_LABELS, "link_sticker", timeout=4, dump_on_fail=True
-            )
+            # Qualquer item de figurinha cujo desc contenha 'link'.
+            try:
+                items = self.d(
+                    resourceId=sticker_id, descriptionMatches="(?i).*link.*"
+                )
+                if items.exists:
+                    items[0].click()
+                    clicked_link = True
+                    self._log("  [sticker] cliquei na figurinha de link.")
+            except Exception:
+                pass
         if not clicked_link:
+            self._log("  [sticker] não achei a figurinha de link. Tela:")
+            self._log(self.dump_state("sticker_tray"))
             return False
-        time.sleep(1.8)
+        time.sleep(2)
 
-        # 5) Digita a URL no campo que aparece.
+        # 3) Tela de inserir o link: digita a URL no campo (que NÃO é a busca).
+        self._log("  [diag tela do link]:")
+        self._log(self.dump_state("link_entry"))
         typed = False
         try:
-            field = self.d(className="android.widget.EditText")
-            if field.exists:
-                field.click()
+            fields = self.d(className="android.widget.EditText")
+            n = fields.count if hasattr(fields, "count") else 0
+            target = None
+            for i in range(n):
+                f = fields[i]
+                try:
+                    rid = (f.info or {}).get("resourceName") or ""
+                except Exception:
+                    rid = ""
+                if "row_search_edit_text" not in rid:
+                    target = f
+                    break
+            if target is None and fields.exists:
+                target = fields[0]
+            if target is not None:
+                target.click()
                 time.sleep(0.4)
-                field.set_text(link)
+                target.set_text(link)
                 typed = True
-                self._log(f"  [sticker] URL digitada: {link}")
-        except Exception:
-            pass
+                self._log(f"  [sticker] URL digitada no campo do link: {link}")
+        except Exception as exc:
+            self._log(f"  [sticker] erro ao digitar URL: {exc}")
         if not typed:
-            try:
-                self.d.send_keys(link)
-                typed = True
-            except Exception:
-                pass
-        if not typed:
-            self._log("  [sticker] não consegui digitar a URL. Tela:")
-            self._log(self.dump_state("type_url"))
+            self._log("  [sticker] não consegui digitar a URL.")
             return False
         time.sleep(0.8)
 
-        # 6) Confirma (Concluído/Done) e posiciona a figurinha.
+        # 4) Confirma (Concluído/Done).
         self._find_and_click(
             _DONE_LABELS, "confirmar_link", timeout=5, dump_on_fail=True
         )
-        time.sleep(1.5)
+        time.sleep(1.8)
         self._log("  [sticker] sticker de link adicionado.")
         return True
 
