@@ -513,16 +513,30 @@ class AndroidStoryPoster:
         """No editor de story, adiciona sticker de link com a URL."""
         self._log(f"  Adicionando sticker de link: {link}")
 
-        # 1) Abre a bandeja de figurinhas pelo botão real (asset_button).
+        # A barra de ferramentas (Texto/Figurinhas/Músicas) renderiza um
+        # instante DEPOIS do editor abrir — espera o asset_button surgir.
         opened = False
         try:
-            btn = self.d(resourceId=_RID_ASSET)
-            if btn.exists:
-                btn.click()
+            if self.d(resourceId=_RID_ASSET).wait(timeout=10):
+                self.d(resourceId=_RID_ASSET).click()
                 opened = True
                 self._log("  [sticker] abri Figurinhas (asset_button).")
         except Exception:
             pass
+        # Plano B: clicar pelo texto/descrição 'Figurinhas'.
+        if not opened:
+            for q in ["Figurinhas", "Sticker", "Stickers"]:
+                try:
+                    el = self.d(textContains=q)
+                    if not el.exists:
+                        el = self.d(descriptionContains=q)
+                    if el.exists:
+                        el.click()
+                        opened = True
+                        self._log(f"  [sticker] abri por texto: '{q}'.")
+                        break
+                except Exception:
+                    pass
         if not opened:
             opened = self._find_and_click(
                 _STICKER_LABELS, "stickers", timeout=5, dump_on_fail=False
