@@ -582,43 +582,65 @@ class AndroidStoryPoster:
             return False
         time.sleep(2)
 
-        # 3) Tela de inserir o link: digita a URL no campo (que NÃO é a busca).
-        self._log("  [diag tela do link]:")
-        self._log(self.dump_state("link_entry"))
+        # 3) Tela de inserir o link: digita a URL no campo do link.
+        url_id = f"{IG_PKG}:id/link_sticker_list_web_url_edit_text"
         typed = False
         try:
-            fields = self.d(className="android.widget.EditText")
-            n = fields.count if hasattr(fields, "count") else 0
-            target = None
-            for i in range(n):
-                f = fields[i]
-                try:
-                    rid = (f.info or {}).get("resourceName") or ""
-                except Exception:
-                    rid = ""
-                if "row_search_edit_text" not in rid:
-                    target = f
-                    break
-            if target is None and fields.exists:
-                target = fields[0]
-            if target is not None:
-                target.click()
+            field = self.d(resourceId=url_id)
+            if field.wait(timeout=6):
+                field.click()
                 time.sleep(0.4)
-                target.set_text(link)
+                field.set_text(link)
                 typed = True
                 self._log(f"  [sticker] URL digitada no campo do link: {link}")
         except Exception as exc:
-            self._log(f"  [sticker] erro ao digitar URL: {exc}")
+            self._log(f"  [sticker] erro ao digitar URL (id): {exc}")
         if not typed:
-            self._log("  [sticker] não consegui digitar a URL.")
+            # Fallback: qualquer EditText que não seja a busca.
+            try:
+                fields = self.d(className="android.widget.EditText")
+                n = fields.count if hasattr(fields, "count") else 0
+                for i in range(n):
+                    f = fields[i]
+                    try:
+                        rid = (f.info or {}).get("resourceName") or ""
+                    except Exception:
+                        rid = ""
+                    if "row_search_edit_text" not in rid:
+                        f.click()
+                        time.sleep(0.4)
+                        f.set_text(link)
+                        typed = True
+                        break
+            except Exception:
+                pass
+        if not typed:
+            self._log("  [sticker] não consegui digitar a URL. Tela:")
+            self._log(self.dump_state("link_entry"))
             return False
         time.sleep(0.8)
 
-        # 4) Confirma (Concluído/Done).
-        self._find_and_click(
-            _DONE_LABELS, "confirmar_link", timeout=5, dump_on_fail=True
-        )
-        time.sleep(1.8)
+        # 4) Confirma no botão 'Concluir' pelo id real (texto era 'Concluir'
+        #    com maiúscula e a busca por texto falhava).
+        done_id = f"{IG_PKG}:id/link_sticker_list_done_button"
+        confirmed = False
+        try:
+            done = self.d(resourceId=done_id)
+            if done.exists:
+                done.click()
+                confirmed = True
+                self._log("  [sticker] cliquei em 'Concluir' (id).")
+        except Exception:
+            pass
+        if not confirmed:
+            confirmed = self._find_and_click(
+                ["concluir", "concluído", "done", "pronto"],
+                "confirmar_link", timeout=5, dump_on_fail=True,
+            )
+        if not confirmed:
+            self._log("  [sticker] não confirmei o link.")
+            return False
+        time.sleep(2)
         self._log("  [sticker] sticker de link adicionado.")
         return True
 
