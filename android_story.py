@@ -517,7 +517,7 @@ class AndroidStoryPoster:
         # instante DEPOIS do editor abrir — espera o asset_button surgir.
         opened = False
         try:
-            if self.d(resourceId=_RID_ASSET).wait(timeout=10):
+            if self.d(resourceId=_RID_ASSET).wait(timeout=5):
                 self.d(resourceId=_RID_ASSET).click()
                 opened = True
                 self._log("  [sticker] abri Figurinhas (asset_button).")
@@ -681,30 +681,38 @@ class AndroidStoryPoster:
         dst_x = cx
         dst_y = int(top + canvas_h * 0.85)    # parte inferior do story
 
-        # Gesto com HOLD inicial: a figurinha só é "pega" se segurarmos antes
-        # de arrastar; um drag rápido não move nada.
+        # Deixa a figurinha assentar antes de arrastar.
+        time.sleep(1.2)
+
+        # Arrasto via 'input swipe' (gesto contínuo lento) — é o mais
+        # confiável pro Instagram reconhecer o movimento da figurinha.
         moved = False
         try:
-            self.d.touch.down(src_x, src_y)
-            time.sleep(0.7)
-            steps = 14
-            for i in range(1, steps + 1):
-                x = src_x + (dst_x - src_x) * i / steps
-                y = src_y + (dst_y - src_y) * i / steps
-                self.d.touch.move(int(x), int(y))
-                time.sleep(0.05)
-            time.sleep(0.3)
-            self.d.touch.up(dst_x, dst_y)
+            self.d.shell(
+                f"input swipe {src_x} {src_y} {dst_x} {dst_y} 1500"
+            )
             moved = True
             self._log(
-                f"  [sticker] arrastada p/ baixo -> ({dst_x},{dst_y})."
+                f"  [sticker] arrastada (swipe) ({src_x},{src_y})->"
+                f"({dst_x},{dst_y})."
             )
         except Exception as exc:
-            self._log(f"  [sticker] touch-drag falhou: {exc}")
+            self._log(f"  [sticker] input swipe falhou: {exc}")
+
+        # Reforço com touch (hold + move) caso o swipe não tenha pego.
         if not moved:
             try:
-                self.d.drag(src_x, src_y, dst_x, dst_y, duration=1.2)
-                self._log(f"  [sticker] reposicionada via drag (y={dst_y}).")
+                self.d.touch.down(src_x, src_y)
+                time.sleep(0.7)
+                steps = 14
+                for i in range(1, steps + 1):
+                    x = src_x + (dst_x - src_x) * i / steps
+                    y = src_y + (dst_y - src_y) * i / steps
+                    self.d.touch.move(int(x), int(y))
+                    time.sleep(0.05)
+                time.sleep(0.3)
+                self.d.touch.up(dst_x, dst_y)
+                self._log(f"  [sticker] arrastada (touch) y={dst_y}.")
             except Exception as exc:
                 self._log(f"  [sticker] não reposicionei a figurinha: {exc}")
         time.sleep(1.2)
