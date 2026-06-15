@@ -96,6 +96,10 @@ class App(ctk.CTk):
         self._build_ui()
         self._try_load_saved_token()
 
+        # Conecta o bot automaticamente ao abrir o app (assim você não
+        # precisa clicar em 'Conectar Bot' toda vez).
+        self.after(800, self._auto_connect_bot)
+
     # ── Worker thread (todas as operações Playwright aqui) ───────────────
 
     def _worker_loop(self) -> None:
@@ -1167,6 +1171,13 @@ class App(ctk.CTk):
             self.after(0, lambda: self.login_btn.configure(state="normal"))
 
         self._submit_task(_task)
+
+    def _auto_connect_bot(self) -> None:
+        """Conecta o bot automaticamente no início, se ainda não conectado."""
+        if self._bot is not None:
+            return
+        self._safe_log("Conectando o bot automaticamente...")
+        self._on_connect_bot()
 
     def _on_connect_bot(self) -> None:
         """Fecha Chrome do login, reabre com debug e conecta via CDP."""
