@@ -721,9 +721,9 @@ class AndroidStoryPoster:
             return
         self._log(f"  [pos] tela: {w}x{h}")
 
-        # Fechar o teclado (se ficou aberto após Concluir).
+        # Tenta fechar teclado sem sair do editor: toque no canvas.
         try:
-            self.d.press("back")
+            self.d.click(w // 2, int(h * 0.15))
             time.sleep(0.8)
         except Exception:
             pass
@@ -766,61 +766,60 @@ class AndroidStoryPoster:
         (None, 0, 0, 0, 0) se não achar.
         """
         try:
-            # Lista dispositivos de input
-            out = self.d.shell("getevent -il")[0]
+            out = self.d.shell("getevent -p")[0]
         except Exception:
             return None, 0, 0, 0, 0
 
-        device = None
-        x_min, x_max, y_min, y_max = 0, 0, 0, 0
-        current_dev = None
-        is_touch = False
-        in_abs_x = False
-        in_abs_y = False
+        # Divide por dispositivo (cada seção começa com "add device")
+        devices = re.split(r'(?=add device \d+:)', out)
+        for section in devices:
+            if "ABS_MT_POSITION_X" not in section:
+                continue
+            # Achar caminho do dispositivo
+            dev_m = re.search(r'/dev/input/event\d+', section)
+            if not dev_m:
+                continue
+            dev_path = dev_m.group(0)
 
-        for line in out.splitlines():
-            line_s = line.strip()
-            if line_s.startswith("add device"):
-                # Salva dispositivo anterior se era touch
-                if is_touch and current_dev:
-                    device = current_dev
-                    break
-                m = re.search(r'(/dev/input/event\d+)', line_s)
-                current_dev = m.group(1) if m else None
-                is_touch = False
-                in_abs_x = False
-                in_abs_y = False
-            elif "ABS_MT_POSITION_X" in line_s:
-                is_touch = True
-                in_abs_x = True
-                in_abs_y = False
-            elif "ABS_MT_POSITION_Y" in line_s:
-                in_abs_y = True
-                in_abs_x = False
-            elif "ABS_MT_" in line_s or "ABS (" in line_s:
-                in_abs_x = False
-                in_abs_y = False
-            elif in_abs_x and "max" in line_s:
-                m = re.search(r'max\s+(\d+)', line_s)
-                if m:
-                    x_max = int(m.group(1))
-            elif in_abs_x and "min" in line_s:
-                m = re.search(r'min\s+(\d+)', line_s)
-                if m:
-                    x_min = int(m.group(1))
-            elif in_abs_y and "max" in line_s:
-                m = re.search(r'max\s+(\d+)', line_s)
-                if m:
-                    y_max = int(m.group(1))
-            elif in_abs_y and "min" in line_s:
-                m = re.search(r'min\s+(\d+)', line_s)
-                if m:
-                    y_min = int(m.group(1))
+            # Extrair limites de ABS_MT_POSITION_X e _Y
+            # Formato típico: "  ABS_MT_POSITION_X : value 0, min 0, max 1079 ..."
+            # Ou:             "  0035 : value ..., min ..., max ..."
+            x_max, y_max = 0, 0
+            x_min, y_min = 0, 0
 
-        if is_touch and current_dev:
-            device = current_dev
+            # Regex que captura a linha do ABS_MT_POSITION_X e extrai min/max
+            x_m = re.search(
+                r'ABS_MT_POSITION_X.*?min\s+(\d+).*?max\s+(\d+)',
+                section, re.DOTALL,
+            )
+            if not x_m:
+                # Tenta pelo código hex (0035 = ABS_MT_POSITION_X)
+                x_m = re.search(
+                    r'0035\s*:.*?min\s+(\d+).*?max\s+(\d+)',
+                    section, re.DOTALL,
+                )
+            y_m = re.search(
+                r'ABS_MT_POSITION_Y.*?min\s+(\d+).*?max\s+(\d+)',
+                section, re.DOTALL,
+            )
+            if not y_m:
+                y_m = re.search(
+                    r'0036\s*:.*?min\s+(\d+).*?max\s+(\d+)',
+                    section, re.DOTALL,
+                )
 
-        return device, x_min, x_max, y_min, y_max
+            if x_m:
+                x_min, x_max = int(x_m.group(1)), int(x_m.group(2))
+            if y_m:
+                y_min, y_max = int(y_m.group(1)), int(y_m.group(2))
+
+            self._log(
+                f"  [sendevent] raw: dev={dev_path} "
+                f"x=[{x_min},{x_max}] y=[{y_min},{y_max}]"
+            )
+            return dev_path, x_min, x_max, y_min, y_max
+
+        return None, 0, 0, 0, 0
 
     def _sendevent_drag(
         self, x1: int, y1: int, x2: int, y2: int,
@@ -840,6 +839,14 @@ class AndroidStoryPoster:
             w, h = self.d.window_size()
         except Exception:
             return False
+
+        # Se os limites vieram como 0, assume mapeamento 1:1 com a tela.
+        if xmax == 0:
+            xmax = w - 1
+            self._log(f"  [sendevent] x_max=0; usando tela: {xmax}")
+        if ymax == 0:
+            ymax = h - 1
+            self._log(f"  [sendevent] y_max=0; usando tela: {ymax}")
 
         self._log(
             f"  [sendevent] device={dev} "
@@ -917,9 +924,20 @@ class AndroidStoryPoster:
             return False
 
     def _dismiss_text_editor(self) -> None:
-        """Se o editor de texto do story abriu acidentalmente, fecha."""
+        """Fecha o editor de texto ou diálogo de descarte se abriu."""
         try:
             xml = self.d.dump_hierarchy()
+            # Diálogo "Descartar foto?" — clicar em "Continuar editando"
+            if "Continuar editando" in xml or "Continue editing" in xml:
+                btn = self.d(textContains="Continuar")
+                if not btn.exists:
+                    btn = self.d(textContains="Continue")
+                if btn.exists:
+                    btn.click()
+                    time.sleep(0.5)
+                    self._log("  [pos] diálogo de descarte fechado.")
+                    return
+            # Editor de texto do story
             if "story_text_editor" in xml or (
                 'class="android.widget.EditText"' in xml
                 and "Aa" not in xml[:500]
