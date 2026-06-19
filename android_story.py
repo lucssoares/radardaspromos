@@ -707,9 +707,8 @@ class AndroidStoryPoster:
             return False
         time.sleep(2)
         self._log("  [sticker] sticker de link adicionado.")
-
-        # Reposiciona a figurinha: centralizada e ABAIXO da imagem do produto.
-        self._position_link_sticker()
+        # A imagem do story já posiciona o produto no TOPO, então o sticker
+        # (que nasce no centro) fica naturalmente abaixo do produto.
         return True
 
     def _position_link_sticker(self) -> None:

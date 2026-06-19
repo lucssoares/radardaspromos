@@ -81,7 +81,9 @@ def build_story_image(
     # ── Imagem do produto (pequena, em um card branco arredondado) ────────
     card_max = 460  # lado máximo do card do produto (pequeno)
     prod = _download_image(product_image_url)
-    block_top = STORY_H // 2 - 320  # bloco começa um pouco acima do centro
+    # Produto fica no TOPO do story pra que o sticker de link
+    # (que nasce no centro) fique naturalmente ABAIXO.
+    block_top = 200
 
     card_bottom = block_top
     if prod is not None:
