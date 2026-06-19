@@ -713,78 +713,126 @@ class AndroidStoryPoster:
         return True
 
     def _position_link_sticker(self) -> None:
-        """Arrasta a figurinha p/ ficar centralizada e abaixo do produto.
-
-        A imagem do story é 9:16 (1080x1920). No editor ela fica centrada
-        verticalmente na tela. A figurinha nasce no centro; arrastamos ela
-        pra ~68% da altura do canvas (logo abaixo do card do produto, que
-        fica em torno do centro vertical da imagem).
-        """
+        """Arrasta a figurinha pro rodapé do story (parte inferior)."""
         try:
             w, h = self.d.window_size()
         except Exception as exc:
             self._log(f"  [sticker] não obtive tamanho da tela: {exc}")
             return
-        canvas_h = w * 16 / 9          # altura do story 9:16 na tela
+        self._log(f"  [sticker] tela: {w}x{h}")
+        canvas_h = w * 16 / 9
         if canvas_h > h:
             canvas_h = h
         top = (h - canvas_h) / 2.0
         cx = int(w / 2)
 
-        # Tenta achar a posição REAL da figurinha na árvore (a11y).
         src_x, src_y = self._find_sticker_xy()
         if src_x is None:
             src_x, src_y = cx, int(top + canvas_h * 0.50)
             self._log(
-                f"  [sticker] não localizei a figurinha; uso o centro "
+                f"  [sticker] não localizei; assumo centro "
                 f"({src_x},{src_y})."
             )
         else:
             self._log(
-                f"  [sticker] figurinha localizada em ({src_x},{src_y})."
+                f"  [sticker] figurinha em ({src_x},{src_y})."
             )
         dst_x = cx
-        dst_y = int(top + canvas_h * 0.85)    # parte inferior do story
+        dst_y = int(top + canvas_h * 0.82)
+        self._log(
+            f"  [sticker] destino: ({dst_x},{dst_y})"
+        )
 
-        # Deixa a figurinha assentar antes de arrastar.
-        time.sleep(1.2)
+        time.sleep(1.5)
 
-        # Arrasto via 'input swipe' (gesto contínuo lento) — é o mais
-        # confiável pro Instagram reconhecer o movimento da figurinha.
-        moved = False
+        # Estratégia 1: long-press no lugar (600ms) + arrasto lento (2s)
+        # O Instagram exige segurar o sticker antes de arrastar.
+        self._log("  [sticker] tentativa 1: long-press + swipe lento...")
         try:
+            # Long-press (toque parado por 600ms)
             self.d.shell(
-                f"input swipe {src_x} {src_y} {dst_x} {dst_y} 1500"
+                f"input swipe {src_x} {src_y} {src_x} {src_y} 600"
             )
-            moved = True
+            time.sleep(0.1)
+            # Arrasto lento pro destino (2s)
+            self.d.shell(
+                f"input swipe {src_x} {src_y} {dst_x} {dst_y} 2000"
+            )
             self._log(
-                f"  [sticker] arrastada (swipe) ({src_x},{src_y})->"
-                f"({dst_x},{dst_y})."
+                f"  [sticker] swipe ({src_x},{src_y})->({dst_x},{dst_y})"
             )
         except Exception as exc:
-            self._log(f"  [sticker] input swipe falhou: {exc}")
+            self._log(f"  [sticker] tentativa 1 falhou: {exc}")
 
-        # Reforço com touch (hold + move) caso o swipe não tenha pego.
-        if not moved:
-            try:
-                self.d.touch.down(src_x, src_y)
-                time.sleep(0.7)
-                steps = 14
-                for i in range(1, steps + 1):
-                    x = src_x + (dst_x - src_x) * i / steps
-                    y = src_y + (dst_y - src_y) * i / steps
-                    self.d.touch.move(int(x), int(y))
-                    time.sleep(0.05)
-                time.sleep(0.3)
-                self.d.touch.up(dst_x, dst_y)
-                self._log(f"  [sticker] arrastada (touch) y={dst_y}.")
-            except Exception as exc:
-                self._log(f"  [sticker] não reposicionei a figurinha: {exc}")
-        time.sleep(1.2)
+        time.sleep(1.0)
 
-        # Diagnóstico: lista nós com bounds (pra eu ver onde está a figurinha).
-        self._log("  [diag pós-reposição] nós com bounds:")
-        self._log(self._dump_bounds())
+        # Verifica se mexeu (compara coordenadas antes/depois)
+        new_x, new_y = self._find_sticker_xy()
+        if new_y is not None and abs(new_y - src_y) > 50:
+            self._log(
+                f"  [sticker] moveu! Nova posição: ({new_x},{new_y})"
+            )
+            return
+
+        # Estratégia 2: gesto único MUITO lento (4s total)
+        self._log("  [sticker] tentativa 2: swipe 4s...")
+        try:
+            self.d.shell(
+                f"input swipe {src_x} {src_y} {dst_x} {dst_y} 4000"
+            )
+        except Exception as exc:
+            self._log(f"  [sticker] tentativa 2 falhou: {exc}")
+
+        time.sleep(1.0)
+
+        new_x, new_y = self._find_sticker_xy()
+        if new_y is not None and abs(new_y - src_y) > 50:
+            self._log(
+                f"  [sticker] moveu! Nova posição: ({new_x},{new_y})"
+            )
+            return
+
+        # Estratégia 3: uiautomator2 drag() com duração longa
+        self._log("  [sticker] tentativa 3: u2 drag 3s...")
+        try:
+            self.d.drag(src_x, src_y, dst_x, dst_y, duration=3.0)
+        except Exception as exc:
+            self._log(f"  [sticker] tentativa 3 falhou: {exc}")
+
+        time.sleep(1.0)
+
+        new_x, new_y = self._find_sticker_xy()
+        if new_y is not None and abs(new_y - src_y) > 50:
+            self._log(
+                f"  [sticker] moveu! Nova posição: ({new_x},{new_y})"
+            )
+            return
+
+        # Estratégia 4: touch.down + hold longo + moves graduais + up
+        self._log("  [sticker] tentativa 4: touch manual (hold 1s)...")
+        try:
+            self.d.touch.down(src_x, src_y)
+            time.sleep(1.0)
+            steps = 30
+            for i in range(1, steps + 1):
+                frac = i / steps
+                mx = int(src_x + (dst_x - src_x) * frac)
+                my = int(src_y + (dst_y - src_y) * frac)
+                self.d.touch.move(mx, my)
+                time.sleep(0.08)
+            time.sleep(0.5)
+            self.d.touch.up(dst_x, dst_y)
+        except Exception as exc:
+            self._log(f"  [sticker] tentativa 4 falhou: {exc}")
+
+        time.sleep(1.0)
+
+        # Diagnóstico final
+        new_x, new_y = self._find_sticker_xy()
+        self._log(
+            f"  [sticker] posição final: ({new_x},{new_y}) "
+            f"(alvo era y={dst_y})"
+        )
 
     def _find_sticker_xy(self) -> tuple[int | None, int | None]:
         """Acha o centro da figurinha de link na árvore de acessibilidade.
