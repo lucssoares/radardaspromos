@@ -705,181 +705,185 @@ class AndroidStoryPoster:
         if not confirmed:
             self._log("  [sticker] não confirmei o link.")
             return False
-        time.sleep(2)
+        time.sleep(2.5)
         self._log("  [sticker] sticker de link adicionado.")
-        # A imagem do story já posiciona o produto no TOPO, então o sticker
-        # (que nasce no centro) fica naturalmente abaixo do produto.
+
+        # Arrasta o sticker pra parte inferior do story.
+        self._position_link_sticker()
         return True
 
     def _position_link_sticker(self) -> None:
-        """Arrasta a figurinha pro rodapé do story (parte inferior)."""
+        """Arrasta a figurinha de link pra parte inferior do story."""
         try:
             w, h = self.d.window_size()
         except Exception as exc:
-            self._log(f"  [sticker] não obtive tamanho da tela: {exc}")
+            self._log(f"  [pos] não obtive tamanho da tela: {exc}")
             return
-        self._log(f"  [sticker] tela: {w}x{h}")
-        canvas_h = w * 16 / 9
-        if canvas_h > h:
-            canvas_h = h
-        top = (h - canvas_h) / 2.0
-        cx = int(w / 2)
+        self._log(f"  [pos] tela: {w}x{h}")
 
-        src_x, src_y = self._find_sticker_xy()
+        # Primeiro: fechar o teclado (se ficou aberto após Concluir).
+        try:
+            self.d.press("back")
+            time.sleep(0.8)
+        except Exception:
+            pass
+
+        # Localizar sticker na tela.
+        src_x, src_y, sticker_info = self._find_sticker_broad()
         if src_x is None:
-            src_x, src_y = cx, int(top + canvas_h * 0.50)
+            # Se não achou, assumir centro do canvas do story.
+            src_x, src_y = w // 2, h // 2
             self._log(
-                f"  [sticker] não localizei; assumo centro "
-                f"({src_x},{src_y})."
+                f"  [pos] não localizei sticker; assumo ({src_x},{src_y})."
             )
         else:
             self._log(
-                f"  [sticker] figurinha em ({src_x},{src_y})."
+                f"  [pos] sticker encontrado em ({src_x},{src_y})"
+                f" [{sticker_info}]"
             )
-        dst_x = cx
-        dst_y = int(top + canvas_h * 0.82)
-        self._log(
-            f"  [sticker] destino: ({dst_x},{dst_y})"
-        )
 
-        time.sleep(1.5)
+        # Destino: parte inferior do story (~80% da altura da tela).
+        dst_x = w // 2
+        dst_y = int(h * 0.78)
+        self._log(f"  [pos] destino: ({dst_x},{dst_y})")
 
-        # Estratégia 1: long-press no lugar (600ms) + arrasto lento (2s)
-        # O Instagram exige segurar o sticker antes de arrastar.
-        self._log("  [sticker] tentativa 1: long-press + swipe lento...")
+        time.sleep(0.5)
+
+        # Estratégia: swipe contínuo lento (SEM long-press separado).
+        # Um único gesto de 3s que o Instagram reconhece como drag.
+        self._log("  [pos] arrastando (swipe 3s)...")
         try:
-            # Long-press (toque parado por 600ms)
-            self.d.shell(
-                f"input swipe {src_x} {src_y} {src_x} {src_y} 600"
-            )
-            time.sleep(0.1)
-            # Arrasto lento pro destino (2s)
-            self.d.shell(
-                f"input swipe {src_x} {src_y} {dst_x} {dst_y} 2000"
-            )
+            self.d.swipe(src_x, src_y, dst_x, dst_y, duration=3.0)
             self._log(
-                f"  [sticker] swipe ({src_x},{src_y})->({dst_x},{dst_y})"
+                f"  [pos] swipe ok ({src_x},{src_y})->({dst_x},{dst_y})"
             )
         except Exception as exc:
-            self._log(f"  [sticker] tentativa 1 falhou: {exc}")
+            self._log(f"  [pos] swipe falhou: {exc}")
+            # Fallback: shell input swipe
+            try:
+                self.d.shell(
+                    f"input swipe {src_x} {src_y} {dst_x} {dst_y} 3000"
+                )
+                self._log("  [pos] fallback shell swipe ok.")
+            except Exception as exc2:
+                self._log(f"  [pos] fallback falhou: {exc2}")
 
         time.sleep(1.0)
 
-        # Verifica se mexeu (compara coordenadas antes/depois)
-        new_x, new_y = self._find_sticker_xy()
-        if new_y is not None and abs(new_y - src_y) > 50:
-            self._log(
-                f"  [sticker] moveu! Nova posição: ({new_x},{new_y})"
-            )
-            return
+        # Se o swipe abriu o editor de texto, fechar.
+        self._dismiss_text_editor()
 
-        # Estratégia 2: gesto único MUITO lento (4s total)
-        self._log("  [sticker] tentativa 2: swipe 4s...")
-        try:
-            self.d.shell(
-                f"input swipe {src_x} {src_y} {dst_x} {dst_y} 4000"
-            )
-        except Exception as exc:
-            self._log(f"  [sticker] tentativa 2 falhou: {exc}")
-
-        time.sleep(1.0)
-
-        new_x, new_y = self._find_sticker_xy()
-        if new_y is not None and abs(new_y - src_y) > 50:
-            self._log(
-                f"  [sticker] moveu! Nova posição: ({new_x},{new_y})"
-            )
-            return
-
-        # Estratégia 3: uiautomator2 drag() com duração longa
-        self._log("  [sticker] tentativa 3: u2 drag 3s...")
-        try:
-            self.d.drag(src_x, src_y, dst_x, dst_y, duration=3.0)
-        except Exception as exc:
-            self._log(f"  [sticker] tentativa 3 falhou: {exc}")
-
-        time.sleep(1.0)
-
-        new_x, new_y = self._find_sticker_xy()
-        if new_y is not None and abs(new_y - src_y) > 50:
-            self._log(
-                f"  [sticker] moveu! Nova posição: ({new_x},{new_y})"
-            )
-            return
-
-        # Estratégia 4: touch.down + hold longo + moves graduais + up
-        self._log("  [sticker] tentativa 4: touch manual (hold 1s)...")
-        try:
-            self.d.touch.down(src_x, src_y)
-            time.sleep(1.0)
-            steps = 30
-            for i in range(1, steps + 1):
-                frac = i / steps
-                mx = int(src_x + (dst_x - src_x) * frac)
-                my = int(src_y + (dst_y - src_y) * frac)
-                self.d.touch.move(mx, my)
-                time.sleep(0.08)
-            time.sleep(0.5)
-            self.d.touch.up(dst_x, dst_y)
-        except Exception as exc:
-            self._log(f"  [sticker] tentativa 4 falhou: {exc}")
-
-        time.sleep(1.0)
-
-        # Diagnóstico final
-        new_x, new_y = self._find_sticker_xy()
-        self._log(
-            f"  [sticker] posição final: ({new_x},{new_y}) "
-            f"(alvo era y={dst_y})"
-        )
-
-    def _find_sticker_xy(self) -> tuple[int | None, int | None]:
-        """Acha o centro da figurinha de link na árvore de acessibilidade.
-
-        Procura um nó cujo content-desc remeta a link/figurinha e que NÃO
-        seja um botão de barra de ferramentas conhecido.
-        Retorna (x, y) do centro ou (None, None) se não achar.
-        """
-        skip_ids = (
-            "asset_button", "add_text_button", "music_button",
-            "overflow_button", "cancel_button", "add_caption_textview",
-            "story_share_controls_action_bar", "quick_capture_root_container",
-        )
+    def _dismiss_text_editor(self) -> None:
+        """Se o editor de texto do story abriu acidentalmente, fecha."""
         try:
             xml = self.d.dump_hierarchy()
+            # O editor de texto tem um campo de texto focado.
+            if "story_text_editor" in xml or (
+                'class="android.widget.EditText"' in xml
+                and "Aa" not in xml[:500]
+            ):
+                self.d.press("back")
+                time.sleep(0.5)
+                self._log("  [pos] editor de texto fechado.")
         except Exception:
-            return None, None
-        best = None
+            pass
+
+    def _find_sticker_broad(
+        self,
+    ) -> tuple[int | None, int | None, str]:
+        """Localiza o sticker de link na tela do editor.
+
+        Busca em duas passadas:
+        1) Nó com desc/text contendo 'link', 'figurinha', url etc.
+        2) Nó desconhecido na região central (não é toolbar) — candidato.
+
+        Returns (x, y, info) ou (None, None, "").
+        """
+        skip_ids = {
+            "asset_button", "add_text_button", "music_button",
+            "overflow_button", "cancel_button", "add_caption_textview",
+            "story_share_controls_action_bar",
+            "quick_capture_root_container",
+            "link_sticker_list_cancel_button",
+            "link_sticker_list_done_button",
+            "link_sticker_list_web_url_edit_text",
+            "link_sticker_custom_cta_row",
+            "row_search_edit_text", "back_button_ui_refresh_v2",
+        }
+        skip_classes = {
+            "android.widget.EditText", "android.widget.Button",
+        }
+        try:
+            w, h = self.d.window_size()
+            xml = self.d.dump_hierarchy()
+        except Exception:
+            return None, None, ""
+
+        candidates = []
         for m in re.finditer(r"<node\b[^>]*>", xml):
             node = m.group(0)
             desc = re.search(r'content-desc="([^"]*)"', node)
+            txt = re.search(r'\btext="([^"]*)"', node)
             rid = re.search(r'resource-id="([^"]*)"', node)
+            cls = re.search(r'class="([^"]*)"', node)
             bounds = re.search(
                 r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node
             )
             if not bounds:
                 continue
+            x1, y1, x2, y2 = (int(bounds.group(i)) for i in range(1, 5))
+            bw, bh = x2 - x1, y2 - y1
             desc_v = (desc.group(1) if desc else "").lower()
+            txt_v = (txt.group(1) if txt else "").lower()
             rid_v = (rid.group(1) if rid else "").split("/")[-1]
+            cls_v = cls.group(1) if cls else ""
+
             if rid_v in skip_ids:
                 continue
-            looks_link = (
-                "figurinha de link" in desc_v
-                or "link sticker" in desc_v
-                or ("link" in desc_v and "figurinha" in desc_v)
-                or "meli.la" in desc_v
-                or "mercadolivre" in desc_v
+
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            label = desc_v or txt_v
+
+            # Passada 1: texto/desc remete a link
+            link_match = (
+                "figurinha de link" in label
+                or "link sticker" in label
+                or ("link" in label and "figurinha" in label)
+                or "meli.la" in label
+                or "mercadolivre" in label
+                or (txt_v == "link" and bw > 60 and bw < 600)
             )
-            if not looks_link:
+            if link_match:
+                return cx, cy, f"desc/txt match: {label[:40]}"
+
+            # Passada 2: candidato por posição + tamanho
+            if cls_v in skip_classes:
                 continue
-            x1, y1, x2, y2 = (int(bounds.group(i)) for i in range(1, 5))
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-            best = (cx, cy)
-            break
-        if best:
-            return best
-        return None, None
+            in_center_h = abs(cx - w // 2) < w * 0.35
+            in_center_v = h * 0.30 < cy < h * 0.70
+            reasonable_size = 50 < bw < 800 and 30 < bh < 300
+            not_toolbar = cy > h * 0.15 and cy < h * 0.85
+            is_known = rid_v in (
+                "camera_controls", "footer_container",
+                "story_share_controls_action_bar",
+            )
+            if (
+                in_center_h
+                and in_center_v
+                and reasonable_size
+                and not_toolbar
+                and not is_known
+                and not rid_v
+            ):
+                score = abs(cy - h // 2) + abs(cx - w // 2)
+                candidates.append((score, cx, cy, f"{cls_v} {bw}x{bh}"))
+
+        if candidates:
+            candidates.sort()
+            _, cx, cy, info = candidates[0]
+            return cx, cy, f"candidato: {info}"
+
+        return None, None, ""
 
     def _dump_bounds(self) -> str:
         """Lista nós (desc/id + bounds) pra diagnosticar posições na tela."""
