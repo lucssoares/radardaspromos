@@ -96,6 +96,71 @@ class AndroidStoryPoster:
             self._log(f"Não consegui conectar ao Android: {exc}")
             return False
 
+    # ── Wi-Fi ADB ─────────────────────────────────────────────────────────
+    @staticmethod
+    def enable_wifi_adb() -> tuple[bool, str]:
+        """Ativa ADB via TCP/IP na porta 5555 (requer USB conectado).
+
+        Returns (ok, message).
+        """
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["adb", "tcpip", "5555"],
+                capture_output=True, text=True, timeout=10,
+            )
+            out = (result.stdout + result.stderr).strip()
+            if result.returncode == 0 or "restarting" in out.lower():
+                return True, "ADB Wi-Fi ativado na porta 5555."
+            return False, f"Falha ao ativar: {out}"
+        except FileNotFoundError:
+            return False, "ADB não encontrado no PATH."
+        except Exception as exc:
+            return False, f"Erro: {exc}"
+
+    @staticmethod
+    def get_device_ip() -> str | None:
+        """Retorna o IP do dispositivo Android conectado via USB."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["adb", "shell", "ip", "-f", "inet", "addr", "show", "wlan0"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("inet "):
+                    ip = line.split()[1].split("/")[0]
+                    return ip
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def adb_connect_wifi(ip: str, port: int = 5555) -> tuple[bool, str]:
+        """Conecta via ADB a um dispositivo pelo IP (Wi-Fi).
+
+        Returns (ok, message).
+        """
+        import subprocess
+
+        addr = f"{ip}:{port}"
+        try:
+            result = subprocess.run(
+                ["adb", "connect", addr],
+                capture_output=True, text=True, timeout=10,
+            )
+            out = (result.stdout + result.stderr).strip()
+            if "connected" in out.lower() and "cannot" not in out.lower():
+                return True, f"ADB conectado via Wi-Fi: {addr}"
+            return False, f"Falha: {out}"
+        except FileNotFoundError:
+            return False, "ADB não encontrado no PATH."
+        except Exception as exc:
+            return False, f"Erro: {exc}"
+
     def _grant_media_permissions(self) -> None:
         """Concede ao Instagram acesso às fotos/mídia (evita o bloqueio
         'Permitir acesso a fotos e vídeos' que trava a galeria)."""
