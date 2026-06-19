@@ -713,7 +713,7 @@ class AndroidStoryPoster:
         return True
 
     def _position_link_sticker(self) -> None:
-        """Arrasta a figurinha de link pra parte inferior usando sendevent."""
+        """Arrasta a figurinha de link pra parte inferior do story."""
         try:
             w, h = self.d.window_size()
         except Exception as exc:
@@ -721,12 +721,7 @@ class AndroidStoryPoster:
             return
         self._log(f"  [pos] tela: {w}x{h}")
 
-        # Tenta fechar teclado sem sair do editor: toque no canvas.
-        try:
-            self.d.click(w // 2, int(h * 0.15))
-            time.sleep(0.8)
-        except Exception:
-            pass
+        time.sleep(1.0)
 
         # Localizar sticker na tela.
         src_x, src_y, sticker_info = self._find_sticker_broad()
@@ -747,17 +742,95 @@ class AndroidStoryPoster:
 
         time.sleep(0.5)
 
-        # Usar sendevent (kernel-level touch) pra arrastar.
-        ok = self._sendevent_drag(src_x, src_y, dst_x, dst_y)
-        if not ok:
-            self._log("  [pos] sendevent falhou; tentando swipe normal...")
-            try:
-                self.d.swipe(src_x, src_y, dst_x, dst_y, duration=3.0)
-            except Exception:
-                pass
+        moved = False
 
-        time.sleep(1.0)
+        # Estratégia 1: input draganddrop (Android 7+, gesto de DRAG nativo)
+        self._log("  [pos] tentativa 1: input draganddrop...")
+        try:
+            self.d.shell(
+                f"input draganddrop {src_x} {src_y} {dst_x} {dst_y} 3000"
+            )
+            self._log("  [pos] draganddrop executado.")
+            time.sleep(1.0)
+            moved = self._check_sticker_moved(src_y)
+        except Exception as exc:
+            self._log(f"  [pos] draganddrop falhou: {exc}")
+
+        if moved:
+            return
+
         self._dismiss_text_editor()
+        time.sleep(0.5)
+
+        # Estratégia 2: u2 drag() (diferente de swipe — gesto de arrastar)
+        self._log("  [pos] tentativa 2: u2.drag()...")
+        try:
+            self.d.drag(src_x, src_y, dst_x, dst_y, duration=3.0)
+            self._log("  [pos] u2.drag executado.")
+            time.sleep(1.0)
+            moved = self._check_sticker_moved(src_y)
+        except Exception as exc:
+            self._log(f"  [pos] u2.drag falhou: {exc}")
+
+        if moved:
+            return
+
+        self._dismiss_text_editor()
+        time.sleep(0.5)
+
+        # Estratégia 3: touch.down + hold longo (800ms) + moves graduais
+        self._log("  [pos] tentativa 3: touch manual (hold 800ms)...")
+        try:
+            self.d.touch.down(src_x, src_y)
+            time.sleep(0.8)
+            steps = 50
+            for i in range(1, steps + 1):
+                frac = i / steps
+                mx = int(src_x + (dst_x - src_x) * frac)
+                my = int(src_y + (dst_y - src_y) * frac)
+                self.d.touch.move(mx, my)
+                time.sleep(0.05)
+            time.sleep(0.3)
+            self.d.touch.up(dst_x, dst_y)
+            self._log("  [pos] touch manual executado.")
+            time.sleep(1.0)
+            moved = self._check_sticker_moved(src_y)
+        except Exception as exc:
+            self._log(f"  [pos] touch manual falhou: {exc}")
+
+        if moved:
+            return
+
+        self._dismiss_text_editor()
+        time.sleep(0.5)
+
+        # Estratégia 4: sendevent (kernel-level)
+        self._log("  [pos] tentativa 4: sendevent...")
+        ok = self._sendevent_drag(src_x, src_y, dst_x, dst_y)
+        if ok:
+            time.sleep(1.0)
+            moved = self._check_sticker_moved(src_y)
+
+        if not moved:
+            self._dismiss_text_editor()
+            self._log(
+                f"  [pos] NENHUMA estratégia moveu o sticker. "
+                f"Posição final inalterada."
+            )
+
+    def _check_sticker_moved(self, original_y: int) -> bool:
+        """Verifica se o sticker se moveu (y mudou mais que 50px)."""
+        new_x, new_y, _ = self._find_sticker_broad()
+        if new_y is not None and abs(new_y - original_y) > 50:
+            self._log(
+                f"  [pos] ✓ sticker MOVEU! Nova posição: ({new_x},{new_y})"
+            )
+            return True
+        if new_y is not None:
+            self._log(
+                f"  [pos] sticker em ({new_x},{new_y}) — não moveu."
+            )
+        return False
 
     def _get_touch_device(self) -> tuple[str | None, int, int, int, int]:
         """Descobre o dispositivo de toque e os limites dos eixos X/Y.
