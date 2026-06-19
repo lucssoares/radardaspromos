@@ -713,7 +713,7 @@ class AndroidStoryPoster:
         return True
 
     def _position_link_sticker(self) -> None:
-        """Arrasta a figurinha de link pra parte inferior do story."""
+        """Arrasta a figurinha de link pra parte inferior usando sendevent."""
         try:
             w, h = self.d.window_size()
         except Exception as exc:
@@ -721,7 +721,7 @@ class AndroidStoryPoster:
             return
         self._log(f"  [pos] tela: {w}x{h}")
 
-        # Primeiro: fechar o teclado (se ficou aberto após Concluir).
+        # Fechar o teclado (se ficou aberto após Concluir).
         try:
             self.d.press("back")
             time.sleep(0.8)
@@ -731,7 +731,6 @@ class AndroidStoryPoster:
         # Localizar sticker na tela.
         src_x, src_y, sticker_info = self._find_sticker_broad()
         if src_x is None:
-            # Se não achou, assumir centro do canvas do story.
             src_x, src_y = w // 2, h // 2
             self._log(
                 f"  [pos] não localizei sticker; assumo ({src_x},{src_y})."
@@ -742,42 +741,185 @@ class AndroidStoryPoster:
                 f" [{sticker_info}]"
             )
 
-        # Destino: parte inferior do story (~80% da altura da tela).
         dst_x = w // 2
         dst_y = int(h * 0.78)
         self._log(f"  [pos] destino: ({dst_x},{dst_y})")
 
         time.sleep(0.5)
 
-        # Estratégia: swipe contínuo lento (SEM long-press separado).
-        # Um único gesto de 3s que o Instagram reconhece como drag.
-        self._log("  [pos] arrastando (swipe 3s)...")
-        try:
-            self.d.swipe(src_x, src_y, dst_x, dst_y, duration=3.0)
-            self._log(
-                f"  [pos] swipe ok ({src_x},{src_y})->({dst_x},{dst_y})"
-            )
-        except Exception as exc:
-            self._log(f"  [pos] swipe falhou: {exc}")
-            # Fallback: shell input swipe
+        # Usar sendevent (kernel-level touch) pra arrastar.
+        ok = self._sendevent_drag(src_x, src_y, dst_x, dst_y)
+        if not ok:
+            self._log("  [pos] sendevent falhou; tentando swipe normal...")
             try:
-                self.d.shell(
-                    f"input swipe {src_x} {src_y} {dst_x} {dst_y} 3000"
-                )
-                self._log("  [pos] fallback shell swipe ok.")
-            except Exception as exc2:
-                self._log(f"  [pos] fallback falhou: {exc2}")
+                self.d.swipe(src_x, src_y, dst_x, dst_y, duration=3.0)
+            except Exception:
+                pass
 
         time.sleep(1.0)
-
-        # Se o swipe abriu o editor de texto, fechar.
         self._dismiss_text_editor()
+
+    def _get_touch_device(self) -> tuple[str | None, int, int, int, int]:
+        """Descobre o dispositivo de toque e os limites dos eixos X/Y.
+
+        Returns (device_path, x_min, x_max, y_min, y_max) ou
+        (None, 0, 0, 0, 0) se não achar.
+        """
+        try:
+            # Lista dispositivos de input
+            out = self.d.shell("getevent -il")[0]
+        except Exception:
+            return None, 0, 0, 0, 0
+
+        device = None
+        x_min, x_max, y_min, y_max = 0, 0, 0, 0
+        current_dev = None
+        is_touch = False
+        in_abs_x = False
+        in_abs_y = False
+
+        for line in out.splitlines():
+            line_s = line.strip()
+            if line_s.startswith("add device"):
+                # Salva dispositivo anterior se era touch
+                if is_touch and current_dev:
+                    device = current_dev
+                    break
+                m = re.search(r'(/dev/input/event\d+)', line_s)
+                current_dev = m.group(1) if m else None
+                is_touch = False
+                in_abs_x = False
+                in_abs_y = False
+            elif "ABS_MT_POSITION_X" in line_s:
+                is_touch = True
+                in_abs_x = True
+                in_abs_y = False
+            elif "ABS_MT_POSITION_Y" in line_s:
+                in_abs_y = True
+                in_abs_x = False
+            elif "ABS_MT_" in line_s or "ABS (" in line_s:
+                in_abs_x = False
+                in_abs_y = False
+            elif in_abs_x and "max" in line_s:
+                m = re.search(r'max\s+(\d+)', line_s)
+                if m:
+                    x_max = int(m.group(1))
+            elif in_abs_x and "min" in line_s:
+                m = re.search(r'min\s+(\d+)', line_s)
+                if m:
+                    x_min = int(m.group(1))
+            elif in_abs_y and "max" in line_s:
+                m = re.search(r'max\s+(\d+)', line_s)
+                if m:
+                    y_max = int(m.group(1))
+            elif in_abs_y and "min" in line_s:
+                m = re.search(r'min\s+(\d+)', line_s)
+                if m:
+                    y_min = int(m.group(1))
+
+        if is_touch and current_dev:
+            device = current_dev
+
+        return device, x_min, x_max, y_min, y_max
+
+    def _sendevent_drag(
+        self, x1: int, y1: int, x2: int, y2: int,
+        duration: float = 2.5, steps: int = 40,
+    ) -> bool:
+        """Arrasta de (x1,y1) pra (x2,y2) usando sendevent (kernel).
+
+        Converte coordenadas de tela pra coordenadas do dispositivo de toque
+        e envia eventos raw ABS_MT_*.
+        """
+        dev, xmin, xmax, ymin, ymax = self._get_touch_device()
+        if not dev:
+            self._log("  [sendevent] não achei dispositivo de toque.")
+            return False
+
+        try:
+            w, h = self.d.window_size()
+        except Exception:
+            return False
+
+        self._log(
+            f"  [sendevent] device={dev} "
+            f"x=[{xmin},{xmax}] y=[{ymin},{ymax}]"
+        )
+
+        def screen_to_dev(sx: int, sy: int) -> tuple[int, int]:
+            dx = xmin + int((sx / w) * (xmax - xmin))
+            dy = ymin + int((sy / h) * (ymax - ymin))
+            return dx, dy
+
+        # Códigos de evento do kernel Linux
+        EV_ABS = 3
+        EV_SYN = 0
+        EV_KEY = 1
+        SYN_REPORT = 0
+        ABS_MT_TRACKING_ID = 57
+        ABS_MT_POSITION_X = 53
+        ABS_MT_POSITION_Y = 54
+        ABS_MT_TOUCH_MAJOR = 48
+        ABS_MT_PRESSURE = 58
+        BTN_TOUCH = 330
+
+        def se(ev_type: int, code: int, value: int) -> str:
+            return f"sendevent {dev} {ev_type} {code} {value}"
+
+        # Construir script de shell completo (um único comando).
+        cmds: list[str] = []
+
+        # Touch down
+        dx1, dy1 = screen_to_dev(x1, y1)
+        cmds.append(se(EV_ABS, ABS_MT_TRACKING_ID, 0))
+        cmds.append(se(EV_ABS, ABS_MT_POSITION_X, dx1))
+        cmds.append(se(EV_ABS, ABS_MT_POSITION_Y, dy1))
+        cmds.append(se(EV_ABS, ABS_MT_TOUCH_MAJOR, 6))
+        cmds.append(se(EV_ABS, ABS_MT_PRESSURE, 50))
+        cmds.append(se(EV_KEY, BTN_TOUCH, 1))
+        cmds.append(se(EV_SYN, SYN_REPORT, 0))
+
+        # Esperar (hold) — sem mover, pra "pegar" o sticker
+        hold_ms = 400
+        cmds.append(f"sleep 0.{hold_ms}")
+
+        # Mover em passos
+        step_delay = duration / steps
+        for i in range(1, steps + 1):
+            frac = i / steps
+            sx = int(x1 + (x2 - x1) * frac)
+            sy = int(y1 + (y2 - y1) * frac)
+            dx, dy = screen_to_dev(sx, sy)
+            cmds.append(se(EV_ABS, ABS_MT_POSITION_X, dx))
+            cmds.append(se(EV_ABS, ABS_MT_POSITION_Y, dy))
+            cmds.append(se(EV_SYN, SYN_REPORT, 0))
+            # Usar usleep se disponível, senão sleep com fração.
+            delay_s = f"{step_delay:.3f}"
+            cmds.append(f"sleep {delay_s}")
+
+        # Touch up
+        cmds.append(se(EV_ABS, ABS_MT_TRACKING_ID, -1))
+        cmds.append(se(EV_KEY, BTN_TOUCH, 0))
+        cmds.append(se(EV_SYN, SYN_REPORT, 0))
+
+        script = " && ".join(cmds)
+        self._log(
+            f"  [sendevent] arrastando ({x1},{y1})->({x2},{y2}) "
+            f"em {steps} passos..."
+        )
+
+        try:
+            self.d.shell(script)
+            self._log("  [sendevent] arrasto concluído.")
+            return True
+        except Exception as exc:
+            self._log(f"  [sendevent] erro: {exc}")
+            return False
 
     def _dismiss_text_editor(self) -> None:
         """Se o editor de texto do story abriu acidentalmente, fecha."""
         try:
             xml = self.d.dump_hierarchy()
-            # O editor de texto tem um campo de texto focado.
             if "story_text_editor" in xml or (
                 'class="android.widget.EditText"' in xml
                 and "Aa" not in xml[:500]
