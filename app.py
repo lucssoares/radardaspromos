@@ -1249,17 +1249,20 @@ class App(ctk.CTk):
 
     # Portas comuns dos emuladores Android
     _EMULATOR_PORTS = [
-        ("127.0.0.1:5555", "Bluestacks"),
-        ("127.0.0.1:5556", "Bluestacks"),
+        ("127.0.0.1:5555", "LDPlayer/Bluestacks"),
+        ("127.0.0.1:5556", "LDPlayer/Bluestacks"),
         ("127.0.0.1:5565", "Bluestacks"),
-        ("127.0.0.1:62001", "Nox"),
         ("127.0.0.1:21503", "LDPlayer"),
+        ("127.0.0.1:62001", "Nox"),
         ("emulator-5554", "AVD"),
     ]
 
-    def _on_connect_android(self) -> None:
+    def _on_connect_android(self, override_ip: str | None = None) -> None:
         """Conecta ao emulador Android (Bluestacks etc.) ou celular."""
-        ip_or_serial = self.android_serial_entry.get().strip()
+        if override_ip is not None:
+            ip_or_serial = override_ip
+        else:
+            ip_or_serial = self.android_serial_entry.get().strip()
         self.android_connect_btn.configure(state="disabled")
 
         def _do():
@@ -1336,7 +1339,7 @@ class App(ctk.CTk):
                     if serial is None:
                         self._safe_offers_log(
                             "Nenhum emulador encontrado. "
-                            "Abra o Bluestacks e tente de novo."
+                            "Abra o LDPlayer/Bluestacks e tente de novo."
                         )
                         return
 
@@ -1352,7 +1355,7 @@ class App(ctk.CTk):
                 else:
                     self._safe_offers_log(
                         "Falha ao conectar ao Android. "
-                        "Verifique se o Bluestacks está aberto e "
+                        "Verifique se o LDPlayer/Bluestacks está aberto e "
                         "o ADB está ativado nas configurações dele."
                     )
             except Exception as exc:
@@ -1379,24 +1382,27 @@ class App(ctk.CTk):
         # Se tem um IP salvo que é localhost/127.0.0.1, usa ele.
         # Se é um IP remoto antigo (ex: 192.168.x.x), ignora e tenta
         # emuladores (o usuário migrou pra emulador).
-        if saved and (
+        is_local = saved and (
             saved.startswith("127.0.0.1")
             or saved.startswith("localhost")
             or saved.startswith("emulator")
-        ):
+        )
+        if is_local:
             self.after(0, lambda: (
                 self.android_serial_entry.delete(0, "end"),
                 self.android_serial_entry.insert(0, saved),
             ))
         else:
             # Limpa IP antigo de celular, tenta auto-detect
+            if saved:
+                self._save_android_ip("")
             self.after(0, lambda: (
                 self.android_serial_entry.delete(0, "end"),
             ))
         self._safe_offers_log(
             "Conectando ao Android automaticamente..."
         )
-        self._on_connect_android()
+        self._on_connect_android(override_ip="" if not is_local else None)
 
     def _on_android_diagnostic(self) -> None:
         """Roda o diagnóstico do Instagram no Android (captura hierarquia)."""

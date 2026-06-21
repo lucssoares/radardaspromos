@@ -39,7 +39,7 @@ _RID_GALLERY_THUMB = f"{IG_PKG}:id/gallery_grid_item_thumbnail"
 # Marcadores que confirmam que estamos no EDITOR de story.
 _EDITOR_RIDS = [_RID_ASSET, _RID_TEXT, _RID_MUSIC, _RID_CAPTION, _RID_SHARE_BAR]
 
-# Candidatos de texto/content-desc (PT + EN) pra cada passo.
+# Candidatos de texto/content-desc (PT-BR + PT-PT + EN) pra cada passo.
 # O bot tenta todos em ordem; o primeiro que existir na tela é clicado.
 _CREATE_LABELS = ["nova publicação", "new post", "criar", "create"]
 _STORY_LABELS = ["story", "stories", "história", "historia"]
@@ -47,14 +47,15 @@ _STICKER_LABELS = [
     "sticker", "stickers", "adesivo", "adesivos",
     "figurinha", "figurinhas",
 ]
-_LINK_LABELS = ["link"]
+_LINK_LABELS = ["link", "ligação"]
 _DONE_LABELS = [
     "concluído", "concluir", "done", "ok", "pronto", "aplicar",
 ]
 _SHARE_LABELS = [
-    "compartilhar", "share",
+    "compartilhar", "share", "partilhar",
     "adicionar à sua história", "add to your story",
-    "seu story", "your story", "enviar",
+    "seu story", "your story", "tua história",
+    "enviar",
 ]
 _GALLERY_LABELS = ["galeria", "gallery", "recentes", "recents"]
 _NEXT_LABELS = ["avançar", "next", "próximo", "enviar"]
@@ -252,8 +253,8 @@ class AndroidStoryPoster:
                     return True
             except Exception:
                 pass
-        # Reforço por texto (algumas versões).
-        for lbl in ["figurinhas", "reestilizar"]:
+        # Reforço por texto (PT-BR, PT-PT, EN).
+        for lbl in ["figurinhas", "stickers", "reestilizar", "redecorar"]:
             try:
                 if self.d(textContains=lbl).exists:
                     return True
@@ -469,6 +470,12 @@ class AndroidStoryPoster:
                     "Publicando sem sticker..."
                 )
                 stats["detail"] = "sticker falhou, publicando sem"
+                # Fecha a bandeja de stickers (se aberta) pra voltar ao editor.
+                try:
+                    self.d.press("back")
+                    time.sleep(1)
+                except Exception:
+                    pass
 
         # 6) Compartilhar/publicar.
         stats["step"] = "share"
@@ -499,12 +506,14 @@ class AndroidStoryPoster:
 
         # Espera o feed carregar o botão de adicionar story.
         self._wait_for_any(
-            ["Adicionar ao story", "Add to story", "Seu story"], timeout=8
+            ["Adicionar ao story", "Add to story", "Seu story",
+             "A tua história"], timeout=8
         )
 
         # Clica EXATAMENTE no 'Adicionar ao story' (abre a câmera/editor).
         exact_desc = [
             "Adicionar ao story", "Add to story", "Add to your story",
+            "Adicionar à tua história",
         ]
         for desc in exact_desc:
             try:
@@ -517,16 +526,17 @@ class AndroidStoryPoster:
             except Exception:
                 pass
 
-        # Plano B: o avatar 'Seu story' (também abre a câmera).
-        try:
-            el = self.d(textContains="Seu story")
-            if el.exists:
-                el.click()
-                self._log("  [criar] cliquei em 'Seu story'.")
-                time.sleep(2.5)
-                return True
-        except Exception:
-            pass
+        # Plano B: o avatar 'Seu story' / 'A tua história'.
+        for q in ["Seu story", "A tua história", "Your story"]:
+            try:
+                el = self.d(textContains=q)
+                if el.exists:
+                    el.click()
+                    self._log(f"  [criar] cliquei em '{q}'.")
+                    time.sleep(2.5)
+                    return True
+            except Exception:
+                pass
 
         self._log(
             "  [criar] Não encontrei 'Adicionar ao story'. Tela atual:"
@@ -619,6 +629,7 @@ class AndroidStoryPoster:
         clicked_link = False
         for desc in [
             "Figurinha de link", "Link sticker", "Adicionar link",
+            "Sticker de ligação",
         ]:
             try:
                 el = self.d(resourceId=sticker_id, description=desc)
@@ -633,7 +644,8 @@ class AndroidStoryPoster:
             # Qualquer item de figurinha cujo desc contenha 'link'.
             try:
                 items = self.d(
-                    resourceId=sticker_id, descriptionMatches="(?i).*link.*"
+                    resourceId=sticker_id,
+                    descriptionMatches="(?i).*(link|ligação).*",
                 )
                 if items.exists:
                     items[0].click()
@@ -1021,7 +1033,10 @@ class AndroidStoryPoster:
             link_match = (
                 "figurinha de link" in label
                 or "link sticker" in label
+                or "sticker de ligação" in label
+                or "ligação" in label
                 or ("link" in label and "figurinha" in label)
+                or ("link" in label and "sticker" in label)
                 or "meli.la" in label
                 or "mercadolivre" in label
                 or (txt_v == "link" and bw > 60 and bw < 600)
@@ -1092,7 +1107,10 @@ class AndroidStoryPoster:
     def _share_story(self) -> bool:
         """Publica o story clicando em 'Seus stories' (barra inferior)."""
         # Botão principal: 'Seus stories' (publica no seu story).
-        for q in ["Seus stories", "Seu story", "Your story", "Your stories"]:
+        for q in [
+            "Seus stories", "Seu story", "Your story", "Your stories",
+            "A tua história", "Tua história",
+        ]:
             try:
                 el = self.d(textContains=q)
                 if not el.exists:
@@ -1103,7 +1121,8 @@ class AndroidStoryPoster:
                     time.sleep(5)
                     # Possível confirmação extra.
                     self._find_and_click(
-                        ["compartilhar", "share", "concluído", "ok"],
+                        ["compartilhar", "share", "partilhar",
+                         "concluído", "ok"],
                         "confirmar", timeout=3, dump_on_fail=False,
                     )
                     time.sleep(3)
