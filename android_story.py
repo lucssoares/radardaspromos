@@ -737,86 +737,26 @@ class AndroidStoryPoster:
             )
 
         dst_x = w // 2
-        dst_y = int(h * 0.78)
+        # Parte inferior do story, mas ACIMA da zona da lixeira.
+        # Lixeira do Instagram aparece na parte mais baixa (~80%+ da tela).
+        # 65% é seguro: abaixo do centro, acima da lixeira.
+        dst_y = int(h * 0.65)
         self._log(f"  [pos] destino: ({dst_x},{dst_y})")
 
         time.sleep(0.5)
 
-        moved = False
-
-        # Estratégia 1: input draganddrop (Android 7+, gesto de DRAG nativo)
-        self._log("  [pos] tentativa 1: input draganddrop...")
+        # input draganddrop — gesto DRAG nativo do Android (funciona!)
+        self._log("  [pos] arrastando com draganddrop...")
         try:
             self.d.shell(
                 f"input draganddrop {src_x} {src_y} {dst_x} {dst_y} 3000"
             )
             self._log("  [pos] draganddrop executado.")
-            time.sleep(1.0)
-            moved = self._check_sticker_moved(src_y)
         except Exception as exc:
             self._log(f"  [pos] draganddrop falhou: {exc}")
 
-        if moved:
-            return
-
+        time.sleep(1.0)
         self._dismiss_text_editor()
-        time.sleep(0.5)
-
-        # Estratégia 2: u2 drag() (diferente de swipe — gesto de arrastar)
-        self._log("  [pos] tentativa 2: u2.drag()...")
-        try:
-            self.d.drag(src_x, src_y, dst_x, dst_y, duration=3.0)
-            self._log("  [pos] u2.drag executado.")
-            time.sleep(1.0)
-            moved = self._check_sticker_moved(src_y)
-        except Exception as exc:
-            self._log(f"  [pos] u2.drag falhou: {exc}")
-
-        if moved:
-            return
-
-        self._dismiss_text_editor()
-        time.sleep(0.5)
-
-        # Estratégia 3: touch.down + hold longo (800ms) + moves graduais
-        self._log("  [pos] tentativa 3: touch manual (hold 800ms)...")
-        try:
-            self.d.touch.down(src_x, src_y)
-            time.sleep(0.8)
-            steps = 50
-            for i in range(1, steps + 1):
-                frac = i / steps
-                mx = int(src_x + (dst_x - src_x) * frac)
-                my = int(src_y + (dst_y - src_y) * frac)
-                self.d.touch.move(mx, my)
-                time.sleep(0.05)
-            time.sleep(0.3)
-            self.d.touch.up(dst_x, dst_y)
-            self._log("  [pos] touch manual executado.")
-            time.sleep(1.0)
-            moved = self._check_sticker_moved(src_y)
-        except Exception as exc:
-            self._log(f"  [pos] touch manual falhou: {exc}")
-
-        if moved:
-            return
-
-        self._dismiss_text_editor()
-        time.sleep(0.5)
-
-        # Estratégia 4: sendevent (kernel-level)
-        self._log("  [pos] tentativa 4: sendevent...")
-        ok = self._sendevent_drag(src_x, src_y, dst_x, dst_y)
-        if ok:
-            time.sleep(1.0)
-            moved = self._check_sticker_moved(src_y)
-
-        if not moved:
-            self._dismiss_text_editor()
-            self._log(
-                f"  [pos] NENHUMA estratégia moveu o sticker. "
-                f"Posição final inalterada."
-            )
 
     def _check_sticker_moved(self, original_y: int) -> bool:
         """Verifica se o sticker se moveu (y mudou mais que 50px)."""
