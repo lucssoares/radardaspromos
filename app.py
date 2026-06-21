@@ -781,7 +781,7 @@ class App(ctk.CTk):
         )
         self.copy_whatsapp_btn.pack(side="left")
 
-        # ── Android (Wi-Fi / USB) para story com sticker de link ─────────
+        # ── Android (emulador / celular) para story com sticker de link ──
         android_frame = ctk.CTkFrame(tab)
         android_frame.pack(padx=10, pady=(2, 4), fill="x")
 
@@ -793,7 +793,7 @@ class App(ctk.CTk):
 
         self.android_serial_entry = ctk.CTkEntry(
             android_frame,
-            placeholder_text="IP do celular (ex: 192.168.1.100)",
+            placeholder_text="auto (Bluestacks/emulador)",
             width=200,
         )
         self.android_serial_entry.grid(row=0, column=1, padx=4, pady=6)
@@ -803,27 +803,15 @@ class App(ctk.CTk):
 
         self.android_connect_btn = ctk.CTkButton(
             android_frame,
-            text="Conectar Wi-Fi",
+            text="Conectar Android",
             command=self._on_connect_android,
-            width=120,
+            width=140,
             height=32,
             font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#4CAF50",
             hover_color="#388E3C",
         )
         self.android_connect_btn.grid(row=0, column=2, padx=4, pady=6)
-
-        self.android_wifi_setup_btn = ctk.CTkButton(
-            android_frame,
-            text="Ativar Wi-Fi (USB)",
-            command=self._on_setup_wifi_adb,
-            width=130,
-            height=32,
-            font=ctk.CTkFont(size=11),
-            fg_color="#2196F3",
-            hover_color="#1976D2",
-        )
-        self.android_wifi_setup_btn.grid(row=0, column=3, padx=4, pady=6)
 
         self.android_diag_btn = ctk.CTkButton(
             android_frame,
@@ -835,7 +823,7 @@ class App(ctk.CTk):
             fg_color="#FF9800",
             hover_color="#F57C00",
         )
-        self.android_diag_btn.grid(row=0, column=4, padx=4, pady=6)
+        self.android_diag_btn.grid(row=0, column=3, padx=4, pady=6)
 
         # ── Tipo de postagem ─────────────────────────────────────────────
         post_type_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1259,16 +1247,27 @@ class App(ctk.CTk):
         except FileNotFoundError:
             return None
 
+    # Portas comuns dos emuladores Android
+    _EMULATOR_PORTS = [
+        ("127.0.0.1:5555", "Bluestacks"),
+        ("127.0.0.1:5556", "Bluestacks"),
+        ("127.0.0.1:5565", "Bluestacks"),
+        ("127.0.0.1:62001", "Nox"),
+        ("127.0.0.1:21503", "LDPlayer"),
+        ("emulator-5554", "AVD"),
+    ]
+
     def _on_connect_android(self) -> None:
-        """Conecta ao dispositivo Android via Wi-Fi (IP) ou USB."""
+        """Conecta ao emulador Android (Bluestacks etc.) ou celular."""
         ip_or_serial = self.android_serial_entry.get().strip()
         self.android_connect_btn.configure(state="disabled")
 
         def _do():
             try:
                 serial = None
+
                 if ip_or_serial:
-                    # Parece ser um IP → conecta via ADB Wi-Fi primeiro
+                    # Usuário digitou algo específico
                     parts = ip_or_serial.replace(":", ".")
                     looks_like_ip = all(
                         c.isdigit() or c == "." for c in parts
@@ -1282,7 +1281,7 @@ class App(ctk.CTk):
                             except ValueError:
                                 port = 5555
                         self._safe_offers_log(
-                            f"Conectando via Wi-Fi ({ip}:{port})..."
+                            f"Conectando a {ip}:{port}..."
                         )
                         ok, msg = AndroidStoryPoster.adb_connect_wifi(
                             ip, port
@@ -1290,8 +1289,8 @@ class App(ctk.CTk):
                         self._safe_offers_log(f"  {msg}")
                         if not ok:
                             self._safe_offers_log(
-                                "Dica: conecte o USB e clique "
-                                "'Ativar Wi-Fi (USB)' uma vez."
+                                "Falha na conexão. Verifique se o "
+                                "emulador/celular está ligado."
                             )
                             return
                         serial = f"{ip}:{port}"
@@ -1299,9 +1298,47 @@ class App(ctk.CTk):
                     else:
                         serial = ip_or_serial
                 else:
+                    # Auto-detect: tenta emuladores conhecidos
                     self._safe_offers_log(
-                        "Conectando ao Android (auto-detect)..."
+                        "Buscando emulador Android (Bluestacks etc.)..."
                     )
+                    for addr, name in self._EMULATOR_PORTS:
+                        self._safe_offers_log(
+                            f"  Tentando {name} ({addr})..."
+                        )
+                        if ":" in addr and not addr.startswith("emulator"):
+                            ip, port_s = addr.rsplit(":", 1)
+                            ok, msg = AndroidStoryPoster.adb_connect_wifi(
+                                ip, int(port_s)
+                            )
+                            if ok:
+                                serial = addr
+                                self._safe_offers_log(
+                                    f"  {name} encontrado! ({addr})"
+                                )
+                                self._save_android_ip(addr)
+                                self.after(
+                                    0,
+                                    lambda a=addr: (
+                                        self.android_serial_entry.delete(
+                                            0, "end"
+                                        ),
+                                        self.android_serial_entry.insert(
+                                            0, a
+                                        ),
+                                    ),
+                                )
+                                break
+                        else:
+                            serial = addr
+                            break
+
+                    if serial is None:
+                        self._safe_offers_log(
+                            "Nenhum emulador encontrado. "
+                            "Abra o Bluestacks e tente de novo."
+                        )
+                        return
 
                 poster = AndroidStoryPoster(
                     serial=serial, log=self._safe_offers_log
@@ -1313,7 +1350,11 @@ class App(ctk.CTk):
                         "usarão o app do Instagram."
                     )
                 else:
-                    self._safe_offers_log("Falha ao conectar ao Android.")
+                    self._safe_offers_log(
+                        "Falha ao conectar ao Android. "
+                        "Verifique se o Bluestacks está aberto e "
+                        "o ADB está ativado nas configurações dele."
+                    )
             except Exception as exc:
                 self._safe_offers_log(f"Erro ao conectar: {exc}")
             finally:
@@ -1326,66 +1367,34 @@ class App(ctk.CTk):
 
         threading.Thread(target=_do, daemon=True).start()
 
-    def _on_setup_wifi_adb(self) -> None:
-        """Ativa ADB via Wi-Fi (requer USB conectado UMA VEZ)."""
-        self.android_wifi_setup_btn.configure(state="disabled")
-        self._safe_offers_log(
-            "Ativando ADB Wi-Fi (o celular precisa estar via USB agora)..."
-        )
-
-        def _do():
-            try:
-                ok, msg = AndroidStoryPoster.enable_wifi_adb()
-                self._safe_offers_log(f"  {msg}")
-                if ok:
-                    ip = AndroidStoryPoster.get_device_ip()
-                    if ip:
-                        self._safe_offers_log(
-                            f"  IP do celular detectado: {ip}"
-                        )
-                        self._save_android_ip(ip)
-                        self.after(
-                            0,
-                            lambda: self._set_android_ip_entry(ip),
-                        )
-                        self._safe_offers_log(
-                            "  Agora você pode desconectar o cabo USB!\n"
-                            "  Clique 'Conectar Wi-Fi' para conectar "
-                            "sem fio."
-                        )
-                    else:
-                        self._safe_offers_log(
-                            "  Não consegui detectar o IP. "
-                            "Verifique se o celular está conectado ao "
-                            "Wi-Fi e digite o IP manualmente.\n"
-                            "  (No celular: Configurações > Wi-Fi > "
-                            "toque na rede conectada > veja o IP)"
-                        )
-            except Exception as exc:
-                self._safe_offers_log(f"Erro: {exc}")
-            finally:
-                self.after(
-                    0,
-                    lambda: self.android_wifi_setup_btn.configure(
-                        state="normal"
-                    ),
-                )
-
-        threading.Thread(target=_do, daemon=True).start()
-
     def _set_android_ip_entry(self, ip: str) -> None:
         self.android_serial_entry.delete(0, "end")
         self.android_serial_entry.insert(0, ip)
 
     def _auto_connect_android(self) -> None:
-        """Tenta conectar ao Android via Wi-Fi automaticamente."""
+        """Tenta conectar ao Android (emulador) automaticamente."""
         if self._android is not None:
             return
-        saved_ip = self._load_android_ip()
-        if not saved_ip:
-            return
+        saved = self._load_android_ip()
+        # Se tem um IP salvo que é localhost/127.0.0.1, usa ele.
+        # Se é um IP remoto antigo (ex: 192.168.x.x), ignora e tenta
+        # emuladores (o usuário migrou pra emulador).
+        if saved and (
+            saved.startswith("127.0.0.1")
+            or saved.startswith("localhost")
+            or saved.startswith("emulator")
+        ):
+            self.after(0, lambda: (
+                self.android_serial_entry.delete(0, "end"),
+                self.android_serial_entry.insert(0, saved),
+            ))
+        else:
+            # Limpa IP antigo de celular, tenta auto-detect
+            self.after(0, lambda: (
+                self.android_serial_entry.delete(0, "end"),
+            ))
         self._safe_offers_log(
-            f"Conectando ao Android automaticamente ({saved_ip})..."
+            "Conectando ao Android automaticamente..."
         )
         self._on_connect_android()
 
