@@ -87,6 +87,7 @@ class App(ctk.CTk):
         self._running = False
         self._api: InstagramAPI | None = None
         self._android: AndroidStoryPoster | None = None
+        self._scraper_page = None  # Playwright headless page pra scraping ML
 
         # Fila de tarefas para a worker thread do Playwright
         self._task_queue: queue.Queue = queue.Queue()
@@ -96,9 +97,11 @@ class App(ctk.CTk):
         self._build_ui()
         self._try_load_saved_token()
 
-        # Conecta bot e Android automaticamente ao abrir o app.
-        self.after(800, self._auto_connect_bot)
-        self.after(1500, self._auto_connect_android)
+        # Conecta Android (emulador) automaticamente ao abrir o app.
+        # O bot (Chrome/Playwright) NÃO conecta mais automaticamente —
+        # abria e fechava janelas do Chrome, incomodando o usuário.
+        # O usuário pode conectar manualmente se precisar (buscar ofertas).
+        self.after(800, self._auto_connect_android)
 
     # ── Worker thread (todas as operações Playwright aqui) ───────────────
 
@@ -1715,14 +1718,23 @@ class App(ctk.CTk):
             self.offers_listbox.insert("end", line)
         self.offers_listbox.configure(state="disabled")
 
-    def _on_search_offers(self) -> None:
-        """Busca ofertas do ML via Playwright."""
-        if not self._bot or not self._bot._page:
-            self._append_offers_log(
-                "Bot não conectado! Use 'Conectar Bot' na aba Bot de Follow."
-            )
-            return
+    def _get_scraper_page(self):
+        """Retorna uma página Playwright headless pra scraping (sem abrir Chrome visível)."""
+        if self._scraper_page is not None:
+            try:
+                self._scraper_page.title()
+                return self._scraper_page
+            except Exception:
+                self._scraper_page = None
 
+        from playwright.sync_api import sync_playwright
+        self._scraper_pw = sync_playwright().start()
+        browser = self._scraper_pw.chromium.launch(headless=True)
+        self._scraper_page = browser.new_page()
+        return self._scraper_page
+
+    def _on_search_offers(self) -> None:
+        """Busca ofertas do ML via Playwright (headless, não abre Chrome)."""
         keyword = self.ml_keyword_entry.get().strip()
         try:
             max_items = int(self.ml_max_items_entry.get().strip() or "10")
@@ -1733,15 +1745,16 @@ class App(ctk.CTk):
 
         def _task():
             try:
+                page = self._get_scraper_page()
                 if keyword:
                     items = scrape_offers_by_keyword(
-                        self._bot._page, keyword,
+                        page, keyword,
                         max_items=max_items,
                         on_log=self._safe_offers_log,
                     )
                 else:
                     items = scrape_offers(
-                        self._bot._page,
+                        page,
                         max_items=max_items,
                         on_log=self._safe_offers_log,
                     )
@@ -1779,11 +1792,6 @@ class App(ctk.CTk):
                     )
                 else:
                     self._safe_offers_log("Nenhuma oferta encontrada.")
-
-                self._bot._page.goto(
-                    "https://www.instagram.com/",
-                    wait_until="load", timeout=15000,
-                )
             except Exception as exc:
                 self._safe_offers_log(f"Erro: {exc}")
             finally:
@@ -1805,19 +1813,14 @@ class App(ctk.CTk):
             self._append_offers_log("URL inválida. Use uma URL do ML.")
             return
 
-        if not self._bot or not self._bot._page:
-            self._append_offers_log(
-                "Bot não conectado! Use 'Conectar Bot' na aba Bot de Follow."
-            )
-            return
-
         self.extract_btn.configure(state="disabled")
         self._safe_offers_log("Extraindo dados do produto...")
 
         def _task():
             try:
+                page = self._get_scraper_page()
                 data = extract_product_data(
-                    self._bot._page, url, on_log=self._safe_offers_log
+                    page, url, on_log=self._safe_offers_log
                 )
                 if not data:
                     self._safe_offers_log("Falha ao extrair dados.")
@@ -1846,11 +1849,6 @@ class App(ctk.CTk):
                     lambda: self.copy_whatsapp_btn.configure(state="normal"),
                 )
                 self._safe_offers_log("Dados extraídos!")
-
-                self._bot._page.goto(
-                    "https://www.instagram.com/",
-                    wait_until="load", timeout=15000,
-                )
             except Exception as exc:
                 self._safe_offers_log(f"Erro: {exc}")
             finally:
@@ -1863,46 +1861,25 @@ class App(ctk.CTk):
     def _resolve_affiliate_link(self, product: dict) -> str:
         """Resolve o link de afiliado do produto.
 
-        Prioriza o link curto OFICIAL (meli.la) gerado pelo Portal do
-        Afiliado via sessão logada do Chrome. Se o bot não estiver
-        conectado ou falhar, cai no link com a tag de afiliado anexada.
+        Usa o link com a tag de afiliado anexada diretamente.
         """
         product_url = product.get("url", "")
         tag = self.affiliate_tag_entry.get().strip()
 
-        if self._bot is not None:
-            try:
-                self._safe_offers_log("Gerando link de afiliado (meli.la)...")
-                short = self._run_on_worker(
-                    lambda: self._bot.create_affiliate_link(product_url)
-                )
-                if short:
-                    self._safe_offers_log(f"Link de afiliado: {short}")
-                    return short
-            except Exception as exc:
-                self._safe_offers_log(
-                    f"Não consegui gerar o link oficial ({exc}). "
-                    "Usando link com tag."
-                )
-        else:
-            self._safe_offers_log(
-                "Bot não conectado — clique em 'Conectar Bot' p/ gerar o "
-                "link meli.la. Usando link com tag por enquanto."
-            )
-
         if tag:
-            return generate_affiliate_link(product_url, tag)
+            link = generate_affiliate_link(product_url, tag)
+            self._safe_offers_log(f"Link de afiliado: {link}")
+            return link
         return product_url
 
     def _post_product_to_instagram(self, product: dict) -> bool:
         """Posta um produto no Instagram. Retorna True se OK."""
         post_type = self.post_type_var.get()
-        # Story com sticker vai pelo Android (preferido) ou navegador (bot).
-        # Sem Android/bot/API não dá pra postar.
+        # Story com sticker vai pelo Android (emulador LDPlayer).
         has_story_engine = self._android or self._bot
         if not self._api and not (post_type == "story" and has_story_engine):
             self._safe_offers_log(
-                "Conecte o Android (sticker), o Bot ou configure o token "
+                "Conecte o Android (LDPlayer) ou configure o token "
                 "da API na aba Dashboard."
             )
             return False
