@@ -749,10 +749,12 @@ class AndroidStoryPoster:
             )
 
         dst_x = w // 2
-        # Parte inferior do story — max 75% pra não cair na lixeira.
-        # Em telas maiores (>1500px) pode ir até 80%.
-        pct = 0.80 if h > 1500 else 0.75
-        dst_y = int(h * pct)
+        # Parte inferior sem cair na lixeira.
+        # Lixeira ocupa ~200px do fundo em qualquer resolução.
+        # Manter margem segura de 250px do fundo.
+        dst_y = min(int(h * 0.85), h - 250)
+        if dst_y <= src_y:
+            dst_y = int(h * 0.65)
         self._log(f"  [pos] destino: ({dst_x},{dst_y})")
 
         time.sleep(0.5)
