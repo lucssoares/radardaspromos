@@ -88,6 +88,9 @@ class App(ctk.CTk):
         self._api: InstagramAPI | None = None
         self._android: AndroidStoryPoster | None = None
         self._scraper_page = None  # Playwright headless page pra scraping ML
+        self._ml_logged_in = os.path.exists(
+            os.path.join(os.path.dirname(__file__), "ml_cookies.json")
+        )
 
         # Fila de tarefas para a worker thread do Playwright
         self._task_queue: queue.Queue = queue.Queue()
@@ -697,17 +700,18 @@ class App(ctk.CTk):
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
         btn_frame.pack(padx=10, pady=(2, 2), fill="x")
 
-        self.offers_connect_btn = ctk.CTkButton(
+        self.ml_login_btn = ctk.CTkButton(
             btn_frame,
-            text="Conectar Bot",
-            command=self._on_connect_bot,
-            width=120,
+            text="Login ML",
+            command=self._on_login_mercadolivre,
+            width=100,
             height=36,
             font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#607D8B",
-            hover_color="#455A64",
+            fg_color="#FFD600",
+            hover_color="#FFC107",
+            text_color="#000000",
         )
-        self.offers_connect_btn.pack(side="left", padx=(0, 6))
+        self.ml_login_btn.pack(side="left", padx=(0, 6))
 
         self.search_offers_btn = ctk.CTkButton(
             btn_frame,
@@ -1749,7 +1753,191 @@ class App(ctk.CTk):
         self._scraper_page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => false});
         """)
+        # Carregar cookies do ML se existirem
+        self._load_ml_cookies()
         return self._scraper_page
+
+    def _ml_cookies_file(self) -> str:
+        """Retorna o caminho do arquivo de cookies do ML."""
+        return os.path.join(os.path.dirname(__file__), "ml_cookies.json")
+
+    def _load_ml_cookies(self) -> None:
+        """Carrega cookies do ML no scraper page (se existirem)."""
+        import json
+        path = self._ml_cookies_file()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cookies = json.load(f)
+            if cookies and self._scraper_page:
+                self._scraper_page.context.add_cookies(cookies)
+                self._ml_logged_in = True
+        except Exception:
+            pass
+
+    def _save_ml_cookies(self, page) -> None:
+        """Salva cookies do ML (após login) em arquivo."""
+        import json
+        try:
+            cookies = page.context.cookies()
+            path = self._ml_cookies_file()
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cookies, f)
+        except Exception:
+            pass
+
+    def _on_login_mercadolivre(self) -> None:
+        """Abre Chromium visível pra login no ML. Salva cookies após login."""
+        self.ml_login_btn.configure(state="disabled")
+        self._safe_offers_log("Abrindo janela pra login no Mercado Livre...")
+        self._safe_offers_log("Faça login e depois FECHE a janela.")
+
+        def _task():
+            try:
+                from playwright.sync_api import sync_playwright
+                pw = sync_playwright().start()
+                browser = pw.chromium.launch(
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    viewport={"width": 1280, "height": 800},
+                    locale="pt-BR",
+                )
+                page = context.new_page()
+                page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver',
+                        {get: () => false});
+                """)
+                page.goto(
+                    "https://www.mercadolivre.com.br/afiliados/linkbuilder",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                # Espera o usuário fechar a janela (login + fechar)
+                try:
+                    page.wait_for_event("close", timeout=300000)
+                except Exception:
+                    pass
+
+                # Salvar cookies
+                self._save_ml_cookies(page)
+                self._ml_logged_in = True
+
+                # Se o scraper headless já existe, recarrega cookies nele
+                if self._scraper_page:
+                    try:
+                        import json
+                        path = self._ml_cookies_file()
+                        with open(path, "r", encoding="utf-8") as f:
+                            cookies = json.load(f)
+                        self._scraper_page.context.add_cookies(cookies)
+                    except Exception:
+                        pass
+
+                self._safe_offers_log(
+                    "✓ Login ML salvo! Links meli.la serão gerados "
+                    "automaticamente."
+                )
+
+                browser.close()
+                pw.stop()
+            except Exception as exc:
+                self._safe_offers_log(f"Erro no login ML: {exc}")
+            finally:
+                self.after(
+                    0, lambda: self.ml_login_btn.configure(state="normal")
+                )
+
+        self._submit_task(_task)
+
+    def _generate_meli_la_link(self, product_url: str, tag: str) -> str | None:
+        """Tenta gerar link meli.la via API do portal de afiliados.
+
+        Requer cookies de sessão ML salvos (login prévio).
+        Retorna o link meli.la ou None se falhar.
+        """
+        try:
+            page = self._get_scraper_page()
+            cur = (page.url or "").lower()
+            if "afiliados/linkbuilder" not in cur:
+                page.goto(
+                    "https://www.mercadolivre.com.br/afiliados/linkbuilder",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+                _time.sleep(2)
+
+            # Verificar se está logado (se redireciona pro login, não está)
+            cur_url = page.url or ""
+            if "login" in cur_url.lower() or "signin" in cur_url.lower():
+                return None
+
+            import re
+            result = page.evaluate(
+                """async (args) => {
+                    const { productUrl, tag } = args;
+                    const html = document.documentElement.innerHTML;
+                    let csrf = '';
+                    const pats = [
+                        /name="csrf-token"\\s+content="([^"]+)"/i,
+                        /"csrfToken"\\s*:\\s*"([^"]+)"/i,
+                        /"csrf_token"\\s*:\\s*"([^"]+)"/i,
+                    ];
+                    for (const re of pats) {
+                        const m = html.match(re);
+                        if (m) { csrf = m[1]; break; }
+                    }
+                    if (!csrf) {
+                        const el = document.querySelector(
+                            'meta[name="csrf-token"]');
+                        if (el) csrf = el.getAttribute('content') || '';
+                    }
+                    const headers = {
+                        'accept': 'application/json, text/plain, */*',
+                        'content-type': 'application/json',
+                    };
+                    if (csrf) headers['x-csrf-token'] = csrf;
+                    const payload = { urls: [productUrl] };
+                    if (tag) payload.tag = tag;
+                    try {
+                        const resp = await fetch(
+                            'https://www.mercadolivre.com.br'
+                            + '/affiliate-program/api/v2/affiliates'
+                            + '/createLink',
+                            {
+                                method: 'POST',
+                                headers,
+                                body: JSON.stringify(payload),
+                                credentials: 'include',
+                            }
+                        );
+                        const text = await resp.text();
+                        return { status: resp.status, text: text.slice(0, 800) };
+                    } catch (e) {
+                        return { error: String(e) };
+                    }
+                }""",
+                {"productUrl": product_url, "tag": tag},
+            )
+
+            if result.get("error"):
+                return None
+
+            text = result.get("text", "")
+            import re as _re
+            meli = _re.search(r"https?://meli\.la/[^\s\"'\\]+", text)
+            if meli:
+                return meli.group(0)
+            return None
+        except Exception:
+            return None
 
     def _on_search_offers(self) -> None:
         """Busca ofertas do ML via Playwright (headless, não abre Chrome)."""
@@ -1888,10 +2076,21 @@ class App(ctk.CTk):
     def _resolve_affiliate_link(self, product: dict) -> str:
         """Resolve o link de afiliado do produto.
 
-        Usa o link com a tag de afiliado anexada diretamente.
+        Tenta gerar link meli.la (requer login ML). Se falhar, usa tag.
         """
         product_url = product.get("url", "")
         tag = self.affiliate_tag_entry.get().strip()
+
+        # Tentar meli.la se tiver login ML salvo
+        if self._ml_logged_in and tag:
+            self._safe_offers_log("Gerando link meli.la...")
+            meli_link = self._generate_meli_la_link(product_url, tag)
+            if meli_link:
+                self._safe_offers_log(f"Link meli.la: {meli_link}")
+                return meli_link
+            self._safe_offers_log(
+                "meli.la falhou. Usando link com tag direto."
+            )
 
         if tag:
             link = generate_affiliate_link(product_url, tag)
