@@ -751,8 +751,8 @@ class AndroidStoryPoster:
         dst_x = w // 2
         # Parte inferior do story, mas ACIMA da zona da lixeira.
         # Lixeira do Instagram aparece na parte mais baixa (~80%+ da tela).
-        # 65% é seguro: abaixo do centro, acima da lixeira.
-        dst_y = int(h * 0.65)
+        # 72% fica bem na parte inferior, seguro acima da lixeira.
+        dst_y = int(h * 0.72)
         self._log(f"  [pos] destino: ({dst_x},{dst_y})")
 
         time.sleep(0.5)
