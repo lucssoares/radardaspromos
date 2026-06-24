@@ -749,8 +749,10 @@ class AndroidStoryPoster:
             )
 
         dst_x = w // 2
-        # Parte inferior do story — 85% da tela conforme pedido do usuário.
-        dst_y = int(h * 0.85)
+        # Parte inferior do story — max 75% pra não cair na lixeira.
+        # Em telas maiores (>1500px) pode ir até 80%.
+        pct = 0.80 if h > 1500 else 0.75
+        dst_y = int(h * pct)
         self._log(f"  [pos] destino: ({dst_x},{dst_y})")
 
         time.sleep(0.5)

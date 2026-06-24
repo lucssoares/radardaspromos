@@ -1791,9 +1791,13 @@ class App(ctk.CTk):
         """Abre Chromium visível pra login no ML. Salva cookies após login."""
         self.ml_login_btn.configure(state="disabled")
         self._safe_offers_log("Abrindo janela pra login no Mercado Livre...")
-        self._safe_offers_log("Faça login e depois FECHE a janela.")
+        self._safe_offers_log(
+            "Faça login. A janela fecha sozinha quando detectar o login."
+        )
 
         def _task():
+            pw = None
+            browser = None
             try:
                 from playwright.sync_api import sync_playwright
                 pw = sync_playwright().start()
@@ -1820,36 +1824,74 @@ class App(ctk.CTk):
                     wait_until="domcontentloaded",
                     timeout=60000,
                 )
-                # Espera o usuário fechar a janela (login + fechar)
+
+                # Aguardar login: poll até URL indicar que logou
+                logged_in = False
+                for _ in range(150):  # 5 min máx (150 × 2s)
+                    _time.sleep(2)
+                    try:
+                        cur = page.url or ""
+                    except Exception:
+                        # Janela foi fechada pelo usuário
+                        break
+                    # Se chegou na página de afiliados = logou
+                    if "afiliados" in cur.lower() and (
+                        "login" not in cur.lower()
+                        and "signin" not in cur.lower()
+                    ):
+                        logged_in = True
+                        break
+
+                if logged_in:
+                    # Salvar cookies ANTES de fechar (contexto ainda vivo)
+                    import json
+                    try:
+                        cookies = context.cookies()
+                        path = self._ml_cookies_file()
+                        with open(path, "w", encoding="utf-8") as f:
+                            json.dump(cookies, f)
+                        self._ml_logged_in = True
+                        self._safe_offers_log(
+                            "✓ Login ML salvo! Links meli.la serão "
+                            "gerados automaticamente."
+                        )
+                        # Recarregar no scraper headless
+                        if self._scraper_page:
+                            try:
+                                self._scraper_page.context.add_cookies(
+                                    cookies
+                                )
+                            except Exception:
+                                pass
+                    except Exception as exc:
+                        self._safe_offers_log(
+                            f"Erro ao salvar cookies: {exc}"
+                        )
+                else:
+                    self._safe_offers_log(
+                        "Login ML não detectado (janela fechada ou timeout)."
+                    )
+
                 try:
-                    page.wait_for_event("close", timeout=300000)
+                    browser.close()
                 except Exception:
                     pass
-
-                # Salvar cookies
-                self._save_ml_cookies(page)
-                self._ml_logged_in = True
-
-                # Se o scraper headless já existe, recarrega cookies nele
-                if self._scraper_page:
-                    try:
-                        import json
-                        path = self._ml_cookies_file()
-                        with open(path, "r", encoding="utf-8") as f:
-                            cookies = json.load(f)
-                        self._scraper_page.context.add_cookies(cookies)
-                    except Exception:
-                        pass
-
-                self._safe_offers_log(
-                    "✓ Login ML salvo! Links meli.la serão gerados "
-                    "automaticamente."
-                )
-
-                browser.close()
-                pw.stop()
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
             except Exception as exc:
                 self._safe_offers_log(f"Erro no login ML: {exc}")
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                if pw:
+                    try:
+                        pw.stop()
+                    except Exception:
+                        pass
             finally:
                 self.after(
                     0, lambda: self.ml_login_btn.configure(state="normal")
@@ -1865,21 +1907,28 @@ class App(ctk.CTk):
         """
         try:
             page = self._get_scraper_page()
+            # Recarregar cookies (caso login tenha sido feito depois)
+            self._load_ml_cookies()
             cur = (page.url or "").lower()
             if "afiliados/linkbuilder" not in cur:
+                self._safe_offers_log("  [ml] navegando pro linkbuilder...")
                 page.goto(
                     "https://www.mercadolivre.com.br/afiliados/linkbuilder",
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
-                _time.sleep(2)
+                _time.sleep(3)
 
             # Verificar se está logado (se redireciona pro login, não está)
             cur_url = page.url or ""
+            self._safe_offers_log(f"  [ml] URL atual: {cur_url[:80]}")
             if "login" in cur_url.lower() or "signin" in cur_url.lower():
+                self._safe_offers_log(
+                    "  [ml] FALHA: redirecionou pro login (sessão expirada)"
+                )
+                self._ml_logged_in = False
                 return None
 
-            import re
             result = page.evaluate(
                 """async (args) => {
                     const { productUrl, tag } = args;
@@ -1889,6 +1938,7 @@ class App(ctk.CTk):
                         /name="csrf-token"\\s+content="([^"]+)"/i,
                         /"csrfToken"\\s*:\\s*"([^"]+)"/i,
                         /"csrf_token"\\s*:\\s*"([^"]+)"/i,
+                        /csrf[_-]?token.*?"([a-f0-9]{32,})"/i,
                     ];
                     for (const re of pats) {
                         const m = html.match(re);
@@ -1906,11 +1956,10 @@ class App(ctk.CTk):
                     if (csrf) headers['x-csrf-token'] = csrf;
                     const payload = { urls: [productUrl] };
                     if (tag) payload.tag = tag;
+                    const info = { csrf_found: !!csrf, url: productUrl };
                     try {
                         const resp = await fetch(
-                            'https://www.mercadolivre.com.br'
-                            + '/affiliate-program/api/v2/affiliates'
-                            + '/createLink',
+                            '/affiliate-program/api/v2/affiliates/createLink',
                             {
                                 method: 'POST',
                                 headers,
@@ -1919,24 +1968,48 @@ class App(ctk.CTk):
                             }
                         );
                         const text = await resp.text();
-                        return { status: resp.status, text: text.slice(0, 800) };
+                        info.status = resp.status;
+                        info.body = text.slice(0, 600);
+                        return info;
                     } catch (e) {
-                        return { error: String(e) };
+                        info.error = String(e);
+                        return info;
                     }
                 }""",
                 {"productUrl": product_url, "tag": tag},
             )
 
+            self._safe_offers_log(
+                f"  [ml] resposta: status={result.get('status')} "
+                f"csrf={result.get('csrf_found')} "
+                f"err={result.get('error', '-')}"
+            )
+
             if result.get("error"):
+                self._safe_offers_log(
+                    f"  [ml] body: {result.get('body', '')[:200]}"
+                )
                 return None
 
-            text = result.get("text", "")
-            import re as _re
-            meli = _re.search(r"https?://meli\.la/[^\s\"'\\]+", text)
+            text = result.get("body", "")
+            if text:
+                self._safe_offers_log(f"  [ml] body: {text[:200]}")
+
+            import re
+            meli = re.search(r"https?://meli\.la/[^\s\"'\\]+", text)
             if meli:
                 return meli.group(0)
+
+            # Tentar extrair de outro formato de resposta
+            short = re.search(
+                r'"short[Uu]rl"\s*:\s*"([^"]+)"', text
+            )
+            if short:
+                return short.group(1)
+
             return None
-        except Exception:
+        except Exception as exc:
+            self._safe_offers_log(f"  [ml] exceção: {exc}")
             return None
 
     def _on_search_offers(self) -> None:
