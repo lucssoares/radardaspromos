@@ -228,12 +228,24 @@ def scrape_offers(
 
     log(f"Abrindo página de ofertas: {url}")
     try:
-        page.goto(url, wait_until="load", timeout=30000)
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
     except Exception as exc:
         log(f"Erro ao abrir ofertas: {exc}")
         return []
 
-    time.sleep(4)
+    # Esperar conteúdo carregar (ML usa lazy loading)
+    time.sleep(5)
+
+    # Verificar se foi bloqueado (CAPTCHA/challenge)
+    page_text = page.evaluate("() => document.body.innerText || ''")
+    if "não é um robô" in page_text.lower() or "captcha" in page_text.lower():
+        log("⚠️ ML detectou automação (CAPTCHA). Tentando recarregar...")
+        time.sleep(3)
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            pass
+        time.sleep(5)
 
     # Scroll para carregar mais produtos (lazy loading)
     log("Carregando ofertas...")
@@ -370,12 +382,23 @@ def scrape_offers_by_keyword(
 
     log(f"Buscando ofertas para: {keyword}")
     try:
-        page.goto(search_url, wait_until="load", timeout=30000)
+        page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
     except Exception as exc:
         log(f"Erro ao buscar: {exc}")
         return []
 
-    time.sleep(3)
+    time.sleep(5)
+
+    # Verificar bloqueio anti-bot
+    page_text = page.evaluate("() => document.body.innerText || ''")
+    if "não é um robô" in page_text.lower() or "captcha" in page_text.lower():
+        log("⚠️ ML detectou automação. Tentando recarregar...")
+        time.sleep(3)
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            pass
+        time.sleep(5)
 
     items = page.evaluate("""(maxItems) => {
         const products = [];

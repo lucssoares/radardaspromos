@@ -1729,8 +1729,26 @@ class App(ctk.CTk):
 
         from playwright.sync_api import sync_playwright
         self._scraper_pw = sync_playwright().start()
-        browser = self._scraper_pw.chromium.launch(headless=True)
-        self._scraper_page = browser.new_page()
+        browser = self._scraper_pw.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+            ],
+        )
+        self._scraper_page = browser.new_page(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            locale="pt-BR",
+        )
+        # Remover flag de automação pra evitar bloqueio anti-bot
+        self._scraper_page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => false});
+        """)
         return self._scraper_page
 
     def _on_search_offers(self) -> None:
@@ -1791,9 +1809,18 @@ class App(ctk.CTk):
                         f"use 'Auto-Postar Tudo'."
                     )
                 else:
-                    self._safe_offers_log("Nenhuma oferta encontrada.")
+                    self._safe_offers_log(
+                        "Nenhuma oferta encontrada. "
+                        "Verifique sua conexão com a internet."
+                    )
+                    # Log adicional pra debug
+                    try:
+                        title = page.title()
+                        self._safe_offers_log(f"  (página: {title})")
+                    except Exception:
+                        pass
             except Exception as exc:
-                self._safe_offers_log(f"Erro: {exc}")
+                self._safe_offers_log(f"Erro ao buscar ofertas: {exc}")
             finally:
                 self.after(
                     0,
