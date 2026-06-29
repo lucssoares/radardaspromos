@@ -78,32 +78,24 @@ def build_story_image(
     canvas = bg.convert("RGBA")
     draw = ImageDraw.Draw(canvas)
 
-    # ── Imagem do produto (pequena, em um card branco arredondado) ────────
-    card_max = 460  # lado máximo do card do produto (pequeno)
+    # ── Imagem do produto (centralizada na área branca do fundo) ──────────
+    card_max = 580
     prod = _download_image(product_image_url)
-    # Produto fica na metade SUPERIOR do story; o sticker de link
-    # (que nasce no centro) é arrastado pra parte inferior.
-    block_top = STORY_H // 2 - 420
+    # Área branca do fundo: ~y=450 a ~y=1550 (centro ~y=1000).
+    # Produto centralizado na metade superior dessa área.
+    white_center_y = 950
+    block_top = white_center_y - card_max // 2
 
     card_bottom = block_top
     if prod is not None:
         prod.thumbnail((card_max, card_max), Image.LANCZOS)
-        pad = 24
-        card_w = prod.width + pad * 2
-        card_h = prod.height + pad * 2
+        pad = 0
+        card_w = prod.width
+        card_h = prod.height
         card_x = (STORY_W - card_w) // 2
         card_y = block_top
 
-        # Card branco arredondado (fundo da foto do produto).
-        card = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
-        cdraw = ImageDraw.Draw(card)
-        cdraw.rounded_rectangle(
-            [(0, 0), (card_w - 1, card_h - 1)],
-            radius=28,
-            fill=(255, 255, 255, 255),
-        )
-        card.paste(prod, (pad, pad), prod)
-        canvas.alpha_composite(card, (card_x, card_y))
+        canvas.paste(prod.convert("RGBA"), (card_x, card_y), prod)
         card_bottom = card_y + card_h
 
     # ── Link curto logo abaixo da imagem do produto ───────────────────────
