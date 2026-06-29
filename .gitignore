@@ -16,3 +16,4 @@ chrome_bot_profile/
 metrics_history.json
 token_data.json
 ml_cookies.json
+ml_browser_data/

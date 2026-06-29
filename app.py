@@ -88,9 +88,11 @@ class App(ctk.CTk):
         self._api: InstagramAPI | None = None
         self._android: AndroidStoryPoster | None = None
         self._scraper_page = None  # Playwright headless page pra scraping ML
-        self._ml_logged_in = os.path.exists(
-            os.path.join(os.path.dirname(__file__), "ml_cookies.json")
-        )
+        self._scraper_pw = None
+        self._ml_pw = None  # Playwright instance para ML (persistent context)
+        self._ml_context = None  # Persistent browser context para ML
+        self._ml_page = None  # Página ML (linkbuilder)
+        self._ml_logged_in = os.path.exists(self._ml_user_data_path())
 
         # Fila de tarefas para a worker thread do Playwright
         self._task_queue: queue.Queue = queue.Queue()
@@ -1753,42 +1755,73 @@ class App(ctk.CTk):
         self._scraper_page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => false});
         """)
-        # Carregar cookies do ML se existirem
-        self._load_ml_cookies()
         return self._scraper_page
 
-    def _ml_cookies_file(self) -> str:
-        """Retorna o caminho do arquivo de cookies do ML."""
-        return os.path.join(os.path.dirname(__file__), "ml_cookies.json")
+    def _ml_user_data_path(self) -> str:
+        """Retorna o diretório de dados persistentes do ML."""
+        return os.path.join(os.path.dirname(__file__), "ml_browser_data")
 
-    def _load_ml_cookies(self) -> None:
-        """Carrega cookies do ML no scraper page (se existirem)."""
-        import json
-        path = self._ml_cookies_file()
-        if not os.path.exists(path):
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                cookies = json.load(f)
-            if cookies and self._scraper_page:
-                self._scraper_page.context.add_cookies(cookies)
-                self._ml_logged_in = True
-        except Exception:
-            pass
+    def _close_ml_context(self) -> None:
+        """Fecha o contexto headless do ML (libera user_data_dir)."""
+        if self._ml_page:
+            try:
+                self._ml_page.close()
+            except Exception:
+                pass
+            self._ml_page = None
+        if self._ml_context:
+            try:
+                self._ml_context.close()
+            except Exception:
+                pass
+            self._ml_context = None
+        if self._ml_pw:
+            try:
+                self._ml_pw.stop()
+            except Exception:
+                pass
+            self._ml_pw = None
 
-    def _save_ml_cookies(self, page) -> None:
-        """Salva cookies do ML (após login) em arquivo."""
-        import json
-        try:
-            cookies = page.context.cookies()
-            path = self._ml_cookies_file()
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(cookies, f)
-        except Exception:
-            pass
+    def _get_ml_page(self):
+        """Retorna uma página do contexto persistente ML (headless)."""
+        if self._ml_page is not None:
+            try:
+                self._ml_page.title()
+                return self._ml_page
+            except Exception:
+                self._ml_page = None
+                self._ml_context = None
+                self._ml_pw = None
+
+        from playwright.sync_api import sync_playwright
+        self._ml_pw = sync_playwright().start()
+        self._ml_context = self._ml_pw.chromium.launch_persistent_context(
+            user_data_dir=self._ml_user_data_path(),
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+            ],
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="pt-BR",
+            timezone_id="America/Sao_Paulo",
+        )
+        self._ml_page = self._ml_context.new_page()
+        self._ml_page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => false});
+        """)
+        return self._ml_page
 
     def _on_login_mercadolivre(self) -> None:
-        """Abre Chromium visível pra login no ML. Salva cookies após login."""
+        """Abre Chromium visível com persistent context pra login no ML.
+
+        Usa o mesmo user_data_dir do headless — sessão salva em disco.
+        """
         self.ml_login_btn.configure(state="disabled")
         self._safe_offers_log("Abrindo janela pra login no Mercado Livre...")
         self._safe_offers_log(
@@ -1797,15 +1830,18 @@ class App(ctk.CTk):
 
         def _task():
             pw = None
-            browser = None
+            context = None
             try:
+                # Fechar contexto headless (liberar user_data_dir)
+                self._close_ml_context()
+
                 from playwright.sync_api import sync_playwright
                 pw = sync_playwright().start()
-                browser = pw.chromium.launch(
+                # Abrir VISÍVEL com persistent context (mesmo diretório)
+                context = pw.chromium.launch_persistent_context(
+                    user_data_dir=self._ml_user_data_path(),
                     headless=False,
                     args=["--disable-blink-features=AutomationControlled"],
-                )
-                context = browser.new_context(
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1813,6 +1849,7 @@ class App(ctk.CTk):
                     ),
                     viewport={"width": 1280, "height": 800},
                     locale="pt-BR",
+                    timezone_id="America/Sao_Paulo",
                 )
                 page = context.new_page()
                 page.add_init_script("""
@@ -1832,9 +1869,7 @@ class App(ctk.CTk):
                     try:
                         cur = page.url or ""
                     except Exception:
-                        # Janela foi fechada pelo usuário
                         break
-                    # Se chegou na página de afiliados = logou
                     if "afiliados" in cur.lower() and (
                         "login" not in cur.lower()
                         and "signin" not in cur.lower()
@@ -1843,37 +1878,19 @@ class App(ctk.CTk):
                         break
 
                 if logged_in:
-                    # Salvar cookies ANTES de fechar (contexto ainda vivo)
-                    import json
-                    try:
-                        cookies = context.cookies()
-                        path = self._ml_cookies_file()
-                        with open(path, "w", encoding="utf-8") as f:
-                            json.dump(cookies, f)
-                        self._ml_logged_in = True
-                        self._safe_offers_log(
-                            "✓ Login ML salvo! Links meli.la serão "
-                            "gerados automaticamente."
-                        )
-                        # Recarregar no scraper headless
-                        if self._scraper_page:
-                            try:
-                                self._scraper_page.context.add_cookies(
-                                    cookies
-                                )
-                            except Exception:
-                                pass
-                    except Exception as exc:
-                        self._safe_offers_log(
-                            f"Erro ao salvar cookies: {exc}"
-                        )
+                    self._ml_logged_in = True
+                    self._safe_offers_log(
+                        "✓ Login ML salvo! Links meli.la serão "
+                        "gerados automaticamente."
+                    )
                 else:
                     self._safe_offers_log(
                         "Login ML não detectado (janela fechada ou timeout)."
                     )
 
+                # Fechar contexto visível (dados já salvos em disco)
                 try:
-                    browser.close()
+                    context.close()
                 except Exception:
                     pass
                 try:
@@ -1882,9 +1899,9 @@ class App(ctk.CTk):
                     pass
             except Exception as exc:
                 self._safe_offers_log(f"Erro no login ML: {exc}")
-                if browser:
+                if context:
                     try:
-                        browser.close()
+                        context.close()
                     except Exception:
                         pass
                 if pw:
@@ -1900,15 +1917,15 @@ class App(ctk.CTk):
         self._submit_task(_task)
 
     def _generate_meli_la_link(self, product_url: str, tag: str) -> str | None:
-        """Tenta gerar link meli.la via API do portal de afiliados.
+        """Gera link meli.la via UI do linkbuilder (persistent context).
 
-        Requer cookies de sessão ML salvos (login prévio).
+        Navega pro linkbuilder, preenche a URL, clica 'Gerar', lê o resultado.
         Retorna o link meli.la ou None se falhar.
         """
+        import re as _re
+
         try:
-            page = self._get_scraper_page()
-            # Recarregar cookies (caso login tenha sido feito depois)
-            self._load_ml_cookies()
+            page = self._get_ml_page()
             cur = (page.url or "").lower()
             if "afiliados/linkbuilder" not in cur:
                 self._safe_offers_log("  [ml] navegando pro linkbuilder...")
@@ -1917,9 +1934,9 @@ class App(ctk.CTk):
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
-                _time.sleep(3)
+                _time.sleep(2)
 
-            # Verificar se está logado (se redireciona pro login, não está)
+            # Verificar se está logado
             cur_url = page.url or ""
             self._safe_offers_log(f"  [ml] URL atual: {cur_url[:80]}")
             if "login" in cur_url.lower() or "signin" in cur_url.lower():
@@ -1929,84 +1946,54 @@ class App(ctk.CTk):
                 self._ml_logged_in = False
                 return None
 
-            result = page.evaluate(
-                """async (args) => {
-                    const { productUrl, tag } = args;
-                    const html = document.documentElement.innerHTML;
-                    let csrf = '';
-                    const pats = [
-                        /name="csrf-token"\\s+content="([^"]+)"/i,
-                        /"csrfToken"\\s*:\\s*"([^"]+)"/i,
-                        /"csrf_token"\\s*:\\s*"([^"]+)"/i,
-                        /csrf[_-]?token.*?"([a-f0-9]{32,})"/i,
-                    ];
-                    for (const re of pats) {
-                        const m = html.match(re);
-                        if (m) { csrf = m[1]; break; }
-                    }
-                    if (!csrf) {
-                        const el = document.querySelector(
-                            'meta[name="csrf-token"]');
-                        if (el) csrf = el.getAttribute('content') || '';
-                    }
-                    const headers = {
-                        'accept': 'application/json, text/plain, */*',
-                        'content-type': 'application/json',
-                    };
-                    if (csrf) headers['x-csrf-token'] = csrf;
-                    const payload = { urls: [productUrl] };
-                    if (tag) payload.tag = tag;
-                    const info = { csrf_found: !!csrf, url: productUrl };
-                    try {
-                        const resp = await fetch(
-                            '/affiliate-program/api/v2/affiliates/createLink',
-                            {
-                                method: 'POST',
-                                headers,
-                                body: JSON.stringify(payload),
-                                credentials: 'include',
-                            }
-                        );
-                        const text = await resp.text();
-                        info.status = resp.status;
-                        info.body = text.slice(0, 600);
-                        return info;
-                    } catch (e) {
-                        info.error = String(e);
-                        return info;
-                    }
-                }""",
-                {"productUrl": product_url, "tag": tag},
-            )
-
-            self._safe_offers_log(
-                f"  [ml] resposta: status={result.get('status')} "
-                f"csrf={result.get('csrf_found')} "
-                f"err={result.get('error', '-')}"
-            )
-
-            if result.get("error"):
-                self._safe_offers_log(
-                    f"  [ml] body: {result.get('body', '')[:200]}"
+            # Preencher campo de URL
+            try:
+                url_input = page.get_by_role(
+                    "textbox",
+                    name=_re.compile(r"url|link|insira", _re.IGNORECASE),
                 )
+                url_input.wait_for(state="visible", timeout=10000)
+                url_input.fill("")
+                _time.sleep(0.3)
+                url_input.fill(product_url)
+                self._safe_offers_log("  [ml] URL preenchida no campo.")
+            except Exception as exc:
+                self._safe_offers_log(f"  [ml] campo de URL não encontrado: {exc}")
                 return None
 
-            text = result.get("body", "")
-            if text:
-                self._safe_offers_log(f"  [ml] body: {text[:200]}")
+            # Clicar em 'Gerar'
+            try:
+                gen_btn = page.get_by_role(
+                    "button",
+                    name=_re.compile(r"gerar|criar|generate", _re.IGNORECASE),
+                )
+                gen_btn.wait_for(state="visible", timeout=5000)
+                gen_btn.click()
+                self._safe_offers_log("  [ml] cliquei em 'Gerar'.")
+            except Exception as exc:
+                self._safe_offers_log(f"  [ml] botão 'Gerar' não encontrado: {exc}")
+                return None
 
-            import re
-            meli = re.search(r"https?://meli\.la/[^\s\"'\\]+", text)
+            # Aguardar link aparecer (meli.la ou https://)
+            _time.sleep(4)
+            try:
+                link_el = page.get_by_text(_re.compile(r"^https://"))
+                link_el.first.wait_for(state="visible", timeout=15000)
+                link_text = link_el.first.text_content() or ""
+                self._safe_offers_log(f"  [ml] link gerado: {link_text[:80]}")
+                if "meli.la" in link_text or "mercadolivre" in link_text:
+                    return link_text.strip()
+            except Exception:
+                pass
+
+            # Fallback: procurar qualquer meli.la no HTML da página
+            html = page.content()
+            meli = _re.search(r"https?://meli\.la/[^\s\"'<>]+", html)
             if meli:
+                self._safe_offers_log(f"  [ml] link (html): {meli.group(0)}")
                 return meli.group(0)
 
-            # Tentar extrair de outro formato de resposta
-            short = re.search(
-                r'"short[Uu]rl"\s*:\s*"([^"]+)"', text
-            )
-            if short:
-                return short.group(1)
-
+            self._safe_offers_log("  [ml] nenhum link gerado.")
             return None
         except Exception as exc:
             self._safe_offers_log(f"  [ml] exceção: {exc}")
