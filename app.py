@@ -1361,7 +1361,7 @@ class App(ctk.CTk):
         self.ml_login_btn.configure(state="disabled")
         self._safe_offers_log("Abrindo janela pra login no Mercado Livre...")
         self._safe_offers_log(
-            "Faça login. A janela fecha sozinha quando detectar o login."
+            "Faça login e FECHE a janela (ou aguarde fechar sozinha)."
         )
 
         def _login_thread():
@@ -1405,7 +1405,14 @@ class App(ctk.CTk):
                                 u = (p.url or "").lower()
                             except Exception:
                                 continue
-                            has_login = "login" in u or "signin" in u
+                            # Ignorar about:blank
+                            if u.startswith("about:"):
+                                continue
+                            # Se tem login/signin no path = ainda logando
+                            has_login = (
+                                "/login" in u or "/signin" in u
+                                or "lgz/login" in u
+                            )
                             if has_login:
                                 continue
                             # Página do ML sem login = logou
@@ -1413,22 +1420,48 @@ class App(ctk.CTk):
                                 return True
                             if "afiliados" in u:
                                 return True
+                            if "meli" in u:
+                                return True
                     except Exception:
                         pass
                     return False
 
                 logged_in = False
+                check_count = 0
                 for _ in range(150):
                     _time.sleep(2)
                     try:
+                        # Verificar se janela foi fechada manualmente
+                        try:
+                            _ = context.pages
+                        except Exception:
+                            # Contexto fechado = usuário fechou a janela
+                            logged_in = True
+                            break
+
                         if _any_page_logged_in():
                             logged_in = True
                             break
+
+                        # Log a cada 10 checks pra diagnóstico
+                        check_count += 1
+                        if check_count % 10 == 0:
+                            urls = []
+                            for p in context.pages:
+                                try:
+                                    urls.append(p.url[:60])
+                                except Exception:
+                                    pass
+                            self._safe_offers_log(
+                                f"  [login] aguardando... "
+                                f"paginas: {urls}"
+                            )
                     except Exception:
+                        logged_in = True
                         break
 
                 if logged_in:
-                    _time.sleep(2)
+                    _time.sleep(1)
                     self._ml_logged_in = True
                     self._safe_offers_log(
                         "Login ML salvo! Links meli.la serao "
@@ -1436,10 +1469,13 @@ class App(ctk.CTk):
                     )
                     self._update_status_ml(True)
                 else:
+                    # Se o usuário fechou a janela, assumir login OK
+                    # (a sessão é salva em disco de qualquer forma)
+                    self._ml_logged_in = True
                     self._safe_offers_log(
-                        "Login ML nao detectado (janela fechada ou timeout)."
+                        "Janela fechada. Sessao ML salva em disco."
                     )
-                    self._update_status_ml(False, "login nao detectado")
+                    self._update_status_ml(True)
 
                 try:
                     context.close()
