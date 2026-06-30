@@ -1221,63 +1221,32 @@ class AndroidStoryPoster:
         """Extrai usernames do dump XML da tela de lista do Instagram."""
         found: set[str] = set()
 
+        # Extrair todos os nodes como blocos individuais para busca flexível
+        # (a ordem dos atributos XML varia entre dispositivos)
+        nodes = re.findall(r'<node[^>]+/?>', dump)
+
         # 1. Tentar resource-ids conhecidos
-        for rid_part in self._USERNAME_RID_PATTERNS:
-            # Tenta text="..." e content-desc="..."
-            for attr in ("text", "content-desc"):
-                for m in re.finditer(
-                    rf'resource-id="[^"]*{rid_part}[^"]*"[^>]*{attr}="([^"]+)"',
-                    dump,
-                ):
-                    u = m.group(1).strip().lower()
-                    if u and " " not in u and len(u) <= 30:
-                        found.add(u)
-
-        # 2. Fallback genérico: TextViews do Instagram que parecem usernames
-        if not found:
-            for m in re.finditer(
-                r'resource-id="com\.instagram\.android:id/([^"]+)"[^>]*'
-                r'class="android\.widget\.TextView"[^>]*text="([^"]+)"',
-                dump,
-            ):
-                rid = m.group(1)
-                txt = m.group(2).strip()
-                if not txt or " " in txt or len(txt) > 30:
-                    continue
-                if txt.isdigit():
-                    continue
-                skip_words = [
-                    "seguir", "follow", "remover", "remove",
-                    "confirmar", "cancelar", "pesquisar", "search",
-                    "seguindo", "following", "seguidores", "followers",
-                    "voltar", "back", "fechar", "close",
-                ]
-                if txt.lower() in skip_words:
-                    continue
-                found.add(txt.lower())
-
-        # 3. Fallback mais amplo: qualquer TextView com text que parece username
-        #    (dentro do pacote Instagram, sem resource-id específico)
-        if not found:
-            for m in re.finditer(
-                r'package="com\.instagram\.android"[^>]*'
-                r'class="android\.widget\.TextView"[^>]*text="([^"]+)"',
-                dump,
-            ):
-                txt = m.group(1).strip()
-                if not txt or " " in txt or len(txt) > 30:
-                    continue
-                if txt.isdigit() or txt.startswith("#"):
-                    continue
-                skip_words = [
-                    "seguir", "follow", "remover", "remove",
-                    "confirmar", "cancelar", "pesquisar", "search",
-                    "seguindo", "following", "seguidores", "followers",
-                    "voltar", "back", "fechar", "close", "a seguir",
-                ]
-                if txt.lower() in skip_words:
-                    continue
-                found.add(txt.lower())
+        for node in nodes:
+            rid_m = re.search(r'resource-id="([^"]*)"', node)
+            if not rid_m:
+                continue
+            rid = rid_m.group(1)
+            # Checar se o resource-id contém algum dos padrões conhecidos
+            matched = False
+            for rid_part in self._USERNAME_RID_PATTERNS:
+                if rid_part in rid:
+                    matched = True
+                    break
+            if not matched:
+                continue
+            # Extrair texto do node
+            txt_m = re.search(r'text="([^"]+)"', node)
+            if not txt_m:
+                txt_m = re.search(r'content-desc="([^"]+)"', node)
+            if txt_m:
+                u = txt_m.group(1).strip().lower()
+                if u and " " not in u and len(u) <= 30:
+                    found.add(u)
 
         if diag and not found:
             self._log("  [diag] Nenhum username encontrado. Dump XML parcial:")
@@ -1352,10 +1321,10 @@ class AndroidStoryPoster:
                 stale_rounds = 0
                 self._log(f"  {len(all_users)} perfis coletados...")
 
-            # Scroll pra baixo (swipe mais longo pra garantir)
+            # Scroll pra baixo
             w, h = self.d.window_size()
-            self.d.swipe(w // 2, int(h * 0.75), w // 2, int(h * 0.25), 0.5)
-            time.sleep(2)
+            self.d.swipe(w // 2, int(h * 0.7), w // 2, int(h * 0.3), 0.3)
+            time.sleep(1.5)
             iteration += 1
 
         return list(all_users)
