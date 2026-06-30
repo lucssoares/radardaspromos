@@ -8,6 +8,7 @@ Inclui dashboard de métricas via Instagram Graph API.
 
 import os
 import queue
+import random
 import sys
 import threading
 import time as _time
@@ -19,6 +20,7 @@ from bot import (
     launch_chrome_for_login,
     launch_chrome_with_debug,
     load_follow_log,
+    remove_from_follow_log,
 )
 from instagram_api import load_token_data, save_token_data
 from mercadolivre import (
@@ -83,6 +85,7 @@ class App(ctk.CTk):
         self._bot: InstagramBot | None = None
         self._chrome_process = None
         self._running = False
+        self._unfollow_stop = False
         self._android: AndroidStoryPoster | None = None
         self._scraper_page = None  # Playwright headless page pra scraping ML
         self._scraper_pw = None
@@ -373,26 +376,13 @@ class App(ctk.CTk):
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
         btn_frame.pack(padx=10, pady=(0, 4), fill="x")
 
-        self.unfollow_connect_btn = ctk.CTkButton(
-            btn_frame,
-            text="1. Conectar Bot",
-            command=self._on_connect_bot,
-            width=160,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="#FF9800",
-            hover_color="#F57C00",
-        )
-        self.unfollow_connect_btn.pack(side="left", padx=(0, 8))
-
         self.unfollow_btn = ctk.CTkButton(
             btn_frame,
-            text="2. Limpar Desumildes",
+            text="Limpar Desumildes",
             command=self._on_unfollow,
             width=200,
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
             fg_color="#E91E63",
             hover_color="#C2185B",
         )
@@ -1108,43 +1098,117 @@ class App(ctk.CTk):
         self._submit_task(_task)
 
     def _on_unfollow(self) -> None:
-        """Inicia o processo de limpeza de desumildes."""
+        """Inicia o processo de limpeza de desumildes via LDPlayer."""
         my_user = self.my_username_entry.get().strip().lstrip("@").strip("/")
         if not my_user:
             self._append_unfollow_log("Preencha seu @ (nome de usuário)!")
             return
 
-        if not self._bot:
+        if not self._android:
             self._append_unfollow_log(
-                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
+                "LDPlayer não conectado! Conecte na aba Radar de Ofertas."
             )
             return
 
-        self._bot._stop_requested = False
-        self._bot.on_log = self._safe_unfollow_log
+        self._unfollow_stop = False
         self.unfollow_btn.configure(state="disabled")
         self.unfollow_stop_btn.configure(state="normal")
-        self.unfollow_connect_btn.configure(state="disabled")
         self._running = True
 
         def _task():
             try:
-                self._bot.unfollow_non_followers(my_user)
+                self._unfollow_via_android(my_user)
             except Exception as exc:
                 self._safe_unfollow_log(f"Erro: {exc}")
             finally:
                 self._running = False
-                self._bot.on_log = self._safe_log
+                self._unfollow_stop = False
                 self.after(0, self._reset_buttons)
                 self.after(0, self._update_follow_count)
 
-        self._submit_task(_task)
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _unfollow_via_android(self, my_username: str) -> None:
+        """Coleta seguidores/seguindo e faz unfollow dos desumildes via Android."""
+        log = self._safe_unfollow_log
+        old_log = self._android._log_fn
+        self._android._log_fn = log
+
+        try:
+            stop_fn = lambda: self._unfollow_stop
+
+            log("Iniciando limpeza de desumildes via LDPlayer...")
+
+            # 1. Coletar seguindo
+            log("Coletando quem você segue...")
+            following = self._android.collect_following(my_username, stop_fn)
+            if not following:
+                log("Não consegui coletar a lista de 'seguindo'.")
+                return
+            following_set = {u.lower() for u in following}
+            following_set.discard(my_username.lower())
+
+            if self._unfollow_stop:
+                log("Parado pelo usuário.")
+                return
+
+            # 2. Coletar seguidores
+            log("Coletando quem te segue (seus seguidores)...")
+            followers = self._android.collect_followers(my_username, stop_fn)
+            if not followers:
+                log(
+                    "Não consegui coletar seus seguidores. "
+                    "Abortando por segurança."
+                )
+                return
+            followers_set = {u.lower() for u in followers}
+
+            # 3. Determinar desumildes
+            follows_back = 0
+            candidates = []
+            for u in following_set:
+                if u in followers_set:
+                    follows_back += 1
+                else:
+                    candidates.append(u)
+
+            log(f"  {len(following_set)} seguindo | {len(followers_set)} seguidores")
+            log(f"  {follows_back} seguem de volta (mantidos)")
+            log(f"  {len(candidates)} desumildes (não te seguem de volta).")
+
+            # 4. Unfollow
+            unfollowed = 0
+            errors = 0
+            for username in candidates:
+                if self._unfollow_stop:
+                    log("Parado pelo usuário.")
+                    break
+
+                log(f"@{username}: não te segue de volta. Deixando de seguir...")
+                if self._android.unfollow_user(username):
+                    unfollowed += 1
+                    remove_from_follow_log(username)
+                    log(f"  [{unfollowed}] Unfollow @{username}!")
+                else:
+                    errors += 1
+
+                _time.sleep(random.uniform(3, 8))
+
+            log("=" * 50)
+            log("Limpeza finalizada!")
+            log(f"  Unfollowed: {unfollowed}")
+            log(f"  Seguem de volta: {follows_back}")
+            log(f"  Erros: {errors}")
+            log("=" * 50)
+        finally:
+            self._android._log_fn = old_log
 
     def _on_stop(self) -> None:
         if self._bot:
             self._bot.request_stop()
             self._safe_log("Parando... aguarde a ação atual finalizar.")
-            self._safe_unfollow_log("Parando... aguarde a ação atual finalizar.")
+        self._unfollow_stop = True
+        self._safe_unfollow_log("Parando... aguarde a ação atual finalizar.")
         self.stop_btn.configure(state="disabled")
         self.unfollow_stop_btn.configure(state="disabled")
 
@@ -1155,7 +1219,6 @@ class App(ctk.CTk):
         self.connect_btn.configure(state="normal")
         self.unfollow_btn.configure(state="normal")
         self.unfollow_stop_btn.configure(state="disabled")
-        self.unfollow_connect_btn.configure(state="normal")
 
     # ── Ofertas callbacks ─────────────────────────────────────────────────
 

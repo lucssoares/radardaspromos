@@ -1193,3 +1193,239 @@ class AndroidStoryPoster:
             pass
 
         return "\n".join(report)
+
+    # ── Follow / Unfollow via Android ─────────────────────────────────
+
+    def _open_profile(self, username: str) -> bool:
+        """Abre o perfil de um usuário no app do Instagram."""
+        try:
+            self.d.shell(
+                f"am start -a android.intent.action.VIEW "
+                f"-d 'https://www.instagram.com/{username}/' "
+                f"-p {IG_PKG}"
+            )
+            time.sleep(3)
+            return True
+        except Exception as exc:
+            self._log(f"  Erro ao abrir perfil @{username}: {exc}")
+            return False
+
+    def _collect_list_from_sheet(self, stop_flag: Callable[[], bool] | None = None) -> list[str]:
+        """Coleta usernames da lista aberta (seguidores ou seguindo).
+
+        Faz scroll e coleta todos os usernames visíveis na tela.
+        """
+        all_users: set[str] = set()
+        stale_rounds = 0
+
+        while stale_rounds < 5:
+            if stop_flag and stop_flag():
+                break
+
+            before = len(all_users)
+
+            # Coletar usernames visíveis na tela
+            try:
+                dump = self.d.dump_hierarchy()
+            except Exception:
+                break
+
+            for m in re.finditer(
+                r'resource-id="[^"]*:id/follow_list_username"[^>]*text="([^"]+)"',
+                dump,
+            ):
+                u = m.group(1).strip().lower()
+                if u:
+                    all_users.add(u)
+
+            # Fallback: procurar por outros resource-ids comuns de username
+            if len(all_users) == before:
+                for m in re.finditer(
+                    r'resource-id="[^"]*:id/row_user_textview"[^>]*text="([^"]+)"',
+                    dump,
+                ):
+                    u = m.group(1).strip().lower()
+                    if u:
+                        all_users.add(u)
+
+            # Outro fallback: usernames genéricos em linhas de lista
+            if len(all_users) == before:
+                for m in re.finditer(
+                    r'resource-id="[^"]*:id/row_user_primary_name"[^>]*text="([^"]+)"',
+                    dump,
+                ):
+                    u = m.group(1).strip().lower()
+                    if u:
+                        all_users.add(u)
+
+            if len(all_users) == before:
+                stale_rounds += 1
+            else:
+                stale_rounds = 0
+                self._log(f"  {len(all_users)} perfis coletados...")
+
+            # Scroll pra baixo
+            w, h = self.d.window_size()
+            self.d.swipe(w // 2, int(h * 0.7), w // 2, int(h * 0.3), 0.3)
+            time.sleep(1.5)
+
+        return list(all_users)
+
+    def _tap_text(self, candidates: list[str], timeout: float = 5) -> bool:
+        """Toca no primeiro elemento cujo texto/desc corresponda."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for label in candidates:
+                el = self.d(textContains=label)
+                if el.exists:
+                    el.click()
+                    return True
+                el = self.d(descriptionContains=label)
+                if el.exists:
+                    el.click()
+                    return True
+            time.sleep(0.5)
+        return False
+
+    def collect_following(self, my_username: str,
+                          stop_flag: Callable[[], bool] | None = None) -> list[str]:
+        """Coleta a lista de quem o usuário segue."""
+        self._log(f"Abrindo perfil @{my_username}...")
+        if not self._open_profile(my_username):
+            return []
+        time.sleep(2)
+
+        # Clicar em "Seguindo" / "Following" / "A seguir" (PT-PT)
+        self._log("Abrindo lista de 'seguindo'...")
+        found = False
+        for label in ["seguindo", "following", "a seguir"]:
+            el = self.d(textContains=label, clickable=True)
+            if el.exists:
+                el.click()
+                found = True
+                break
+        if not found:
+            # Tentar por content-desc
+            for label in ["seguindo", "following", "a seguir"]:
+                el = self.d(descriptionContains=label, clickable=True)
+                if el.exists:
+                    el.click()
+                    found = True
+                    break
+        if not found:
+            self._log("Não encontrei o botão 'seguindo'.")
+            return []
+
+        time.sleep(3)
+        self._log("Coletando lista de 'seguindo'...")
+        users = self._collect_list_from_sheet(stop_flag)
+        users = [u for u in users if u != my_username.lower()]
+        self._log(f"Total: {len(users)} perfis seguidos.")
+
+        # Voltar
+        self.d.press("back")
+        time.sleep(1)
+        self.d.press("back")
+        time.sleep(1)
+
+        return users
+
+    def collect_followers(self, my_username: str,
+                          stop_flag: Callable[[], bool] | None = None) -> list[str]:
+        """Coleta a lista de seguidores do usuário."""
+        self._log(f"Abrindo perfil @{my_username}...")
+        if not self._open_profile(my_username):
+            return []
+        time.sleep(2)
+
+        # Clicar em "Seguidores" / "Followers"
+        self._log("Abrindo lista de seguidores...")
+        found = False
+        for label in ["seguidor", "follower"]:
+            el = self.d(textContains=label, clickable=True)
+            if el.exists:
+                el.click()
+                found = True
+                break
+        if not found:
+            for label in ["seguidor", "follower"]:
+                el = self.d(descriptionContains=label, clickable=True)
+                if el.exists:
+                    el.click()
+                    found = True
+                    break
+        if not found:
+            self._log("Não encontrei o botão 'seguidores'.")
+            return []
+
+        time.sleep(3)
+        self._log("Coletando lista de seguidores...")
+        users = self._collect_list_from_sheet(stop_flag)
+        users = [u for u in users if u != my_username.lower()]
+        self._log(f"Total: {len(users)} seguidores.")
+
+        # Voltar
+        self.d.press("back")
+        time.sleep(1)
+        self.d.press("back")
+        time.sleep(1)
+
+        return users
+
+    def unfollow_user(self, username: str) -> bool:
+        """Deixa de seguir um usuário via app Android."""
+        try:
+            if not self._open_profile(username):
+                return False
+            time.sleep(2)
+
+            # Clicar em "Seguindo" / "Following" / "A seguir" (botão no perfil)
+            clicked = False
+            for label in ["Seguindo", "Following", "A seguir"]:
+                el = self.d(text=label, clickable=True)
+                if el.exists:
+                    el.click()
+                    clicked = True
+                    break
+            if not clicked:
+                # Tentar por desc
+                for label in ["Seguindo", "Following", "A seguir"]:
+                    el = self.d(description=label, clickable=True)
+                    if el.exists:
+                        el.click()
+                        clicked = True
+                        break
+            if not clicked:
+                self._log(f"  @{username}: botão 'Seguindo' não encontrado.")
+                self.d.press("back")
+                return False
+
+            time.sleep(2)
+
+            # Confirmar no popup: "Deixar de seguir" / "Unfollow"
+            confirmed = False
+            for label in [
+                "Deixar de seguir", "Unfollow",
+                "Deixar de seguir", "Anular seguimento",
+            ]:
+                el = self.d(textContains=label, clickable=True)
+                if el.exists:
+                    el.click()
+                    confirmed = True
+                    break
+
+            if not confirmed:
+                self._log(f"  @{username}: popup de unfollow não apareceu.")
+                self.d.press("back")
+                return False
+
+            time.sleep(1)
+            self.d.press("back")
+            return True
+        except Exception as exc:
+            self._log(f"  Erro ao deixar de seguir @{username}: {exc}")
+            try:
+                self.d.press("back")
+            except Exception:
+                pass
+            return False
