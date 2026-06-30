@@ -1489,7 +1489,7 @@ class App(ctk.CTk):
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
-                _time.sleep(2)
+                _time.sleep(3)
 
             # Verificar se está logado
             cur_url = page.url or ""
@@ -1502,42 +1502,97 @@ class App(ctk.CTk):
                 self._update_status_ml(False, "sessao expirada")
                 return None
 
-            # Preencher campo de URL
+            # Preencher campo de URL — tentar múltiplos seletores
+            url_filled = False
             try:
-                url_input = page.get_by_role(
-                    "textbox",
-                    name=_re.compile(r"url|link|insira", _re.IGNORECASE),
-                )
+                # Tentar por placeholder
+                url_input = page.locator(
+                    'input[type="text"], input[type="url"], '
+                    'input[placeholder*="url" i], input[placeholder*="link" i], '
+                    'input[placeholder*="cole" i], input[placeholder*="insira" i], '
+                    'input[placeholder*="http" i]'
+                ).first
                 url_input.wait_for(state="visible", timeout=10000)
                 url_input.fill("")
                 _time.sleep(0.3)
                 url_input.fill(product_url)
+                url_filled = True
                 self._safe_offers_log("  [ml] URL preenchida no campo.")
-            except Exception as exc:
-                self._safe_offers_log(f"  [ml] campo de URL não encontrado: {exc}")
-                return None
+            except Exception:
+                pass
 
-            # Clicar em 'Gerar'
+            if not url_filled:
+                try:
+                    # Tentar por role textbox
+                    url_input = page.get_by_role(
+                        "textbox",
+                        name=_re.compile(r"url|link|insira|cole|http", _re.IGNORECASE),
+                    )
+                    url_input.wait_for(state="visible", timeout=5000)
+                    url_input.fill("")
+                    _time.sleep(0.3)
+                    url_input.fill(product_url)
+                    url_filled = True
+                    self._safe_offers_log("  [ml] URL preenchida (role).")
+                except Exception as exc:
+                    self._safe_offers_log(
+                        f"  [ml] campo de URL não encontrado: {exc}"
+                    )
+                    return None
+
+            # Clicar em 'Gerar' / 'Criar' — tentar múltiplos seletores
+            btn_clicked = False
             try:
-                gen_btn = page.get_by_role(
-                    "button",
-                    name=_re.compile(r"gerar|criar|generate", _re.IGNORECASE),
-                )
+                gen_btn = page.locator(
+                    'button:has-text("Gerar"), button:has-text("gerar"), '
+                    'button:has-text("Criar"), button:has-text("criar"), '
+                    'button:has-text("Generate")'
+                ).first
                 gen_btn.wait_for(state="visible", timeout=5000)
                 gen_btn.click()
+                btn_clicked = True
                 self._safe_offers_log("  [ml] cliquei em 'Gerar'.")
-            except Exception as exc:
-                self._safe_offers_log(f"  [ml] botão 'Gerar' não encontrado: {exc}")
-                return None
+            except Exception:
+                pass
+
+            if not btn_clicked:
+                try:
+                    gen_btn = page.get_by_role(
+                        "button",
+                        name=_re.compile(r"gerar|criar|generate", _re.IGNORECASE),
+                    )
+                    gen_btn.wait_for(state="visible", timeout=5000)
+                    gen_btn.click()
+                    btn_clicked = True
+                    self._safe_offers_log("  [ml] cliquei em 'Gerar' (role).")
+                except Exception as exc:
+                    self._safe_offers_log(
+                        f"  [ml] botão 'Gerar' não encontrado: {exc}"
+                    )
+                    return None
 
             # Aguardar link aparecer (meli.la ou https://)
-            _time.sleep(4)
+            _time.sleep(5)
+
+            # Tentar pegar o link do resultado
             try:
-                link_el = page.get_by_text(_re.compile(r"^https://"))
-                link_el.first.wait_for(state="visible", timeout=15000)
-                link_text = link_el.first.text_content() or ""
-                self._safe_offers_log(f"  [ml] link gerado: {link_text[:80]}")
-                if "meli.la" in link_text or "mercadolivre" in link_text:
+                # Procurar elemento que contenha meli.la
+                link_el = page.locator('text=/meli\\.la/').first
+                link_el.wait_for(state="visible", timeout=10000)
+                link_text = link_el.text_content() or ""
+                # Extrair URL do texto
+                meli_m = _re.search(
+                    r"https?://meli\.la/[^\s\"'<>]+", link_text
+                )
+                if meli_m:
+                    self._safe_offers_log(
+                        f"  [ml] link gerado: {meli_m.group(0)}"
+                    )
+                    return meli_m.group(0)
+                if link_text.strip().startswith("http"):
+                    self._safe_offers_log(
+                        f"  [ml] link gerado: {link_text.strip()[:80]}"
+                    )
                     return link_text.strip()
             except Exception:
                 pass
@@ -1549,7 +1604,26 @@ class App(ctk.CTk):
                 self._safe_offers_log(f"  [ml] link (html): {meli.group(0)}")
                 return meli.group(0)
 
-            self._safe_offers_log("  [ml] nenhum link gerado.")
+            # Fallback 2: procurar input com valor que contenha meli.la
+            try:
+                inputs = page.locator("input").all()
+                for inp in inputs:
+                    val = inp.get_attribute("value") or ""
+                    if "meli.la" in val:
+                        self._safe_offers_log(
+                            f"  [ml] link (input): {val[:80]}"
+                        )
+                        return val.strip()
+            except Exception:
+                pass
+
+            # Debug: mostrar o que está na página
+            self._safe_offers_log("  [ml] nenhum link meli.la encontrado.")
+            try:
+                title = page.title()
+                self._safe_offers_log(f"  [ml] titulo pagina: {title[:60]}")
+            except Exception:
+                pass
             return None
         except Exception as exc:
             self._safe_offers_log(f"  [ml] exceção: {exc}")
