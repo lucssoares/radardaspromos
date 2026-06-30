@@ -1821,6 +1821,7 @@ class App(ctk.CTk):
         """Abre Chromium visível com persistent context pra login no ML.
 
         Usa o mesmo user_data_dir do headless — sessão salva em disco.
+        Roda em thread própria (não bloqueia a worker thread).
         """
         self.ml_login_btn.configure(state="disabled")
         self._safe_offers_log("Abrindo janela pra login no Mercado Livre...")
@@ -1828,7 +1829,7 @@ class App(ctk.CTk):
             "Faça login. A janela fecha sozinha quando detectar o login."
         )
 
-        def _task():
+        def _login_thread():
             pw = None
             context = None
             try:
@@ -1837,7 +1838,6 @@ class App(ctk.CTk):
 
                 from playwright.sync_api import sync_playwright
                 pw = sync_playwright().start()
-                # Abrir VISÍVEL com persistent context (mesmo diretório)
                 context = pw.chromium.launch_persistent_context(
                     user_data_dir=self._ml_user_data_path(),
                     headless=False,
@@ -1862,33 +1862,48 @@ class App(ctk.CTk):
                     timeout=60000,
                 )
 
-                # Aguardar login: poll até URL indicar que logou
+                def _any_page_logged_in():
+                    """Verifica se alguma página no contexto indica login OK."""
+                    try:
+                        for p in context.pages:
+                            try:
+                                u = (p.url or "").lower()
+                            except Exception:
+                                continue
+                            has_login = "login" in u or "signin" in u
+                            if has_login:
+                                continue
+                            # Página do ML sem login = logou
+                            if "mercadolivre" in u or "mercadolibre" in u:
+                                return True
+                            if "afiliados" in u:
+                                return True
+                    except Exception:
+                        pass
+                    return False
+
                 logged_in = False
-                for _ in range(150):  # 5 min máx (150 × 2s)
+                for _ in range(150):
                     _time.sleep(2)
                     try:
-                        cur = page.url or ""
+                        if _any_page_logged_in():
+                            logged_in = True
+                            break
                     except Exception:
-                        break
-                    if "afiliados" in cur.lower() and (
-                        "login" not in cur.lower()
-                        and "signin" not in cur.lower()
-                    ):
-                        logged_in = True
                         break
 
                 if logged_in:
+                    _time.sleep(2)
                     self._ml_logged_in = True
                     self._safe_offers_log(
-                        "✓ Login ML salvo! Links meli.la serão "
+                        "Login ML salvo! Links meli.la serao "
                         "gerados automaticamente."
                     )
                 else:
                     self._safe_offers_log(
-                        "Login ML não detectado (janela fechada ou timeout)."
+                        "Login ML nao detectado (janela fechada ou timeout)."
                     )
 
-                # Fechar contexto visível (dados já salvos em disco)
                 try:
                     context.close()
                 except Exception:
@@ -1914,7 +1929,9 @@ class App(ctk.CTk):
                     0, lambda: self.ml_login_btn.configure(state="normal")
                 )
 
-        self._submit_task(_task)
+        # Thread própria: não bloqueia worker (ofertas podem rodar em paralelo)
+        t = threading.Thread(target=_login_thread, daemon=True)
+        t.start()
 
     def _generate_meli_la_link(self, product_url: str, tag: str) -> str | None:
         """Gera link meli.la via UI do linkbuilder (persistent context).
