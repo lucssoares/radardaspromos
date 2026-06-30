@@ -1210,6 +1210,74 @@ class AndroidStoryPoster:
             self._log(f"  Erro ao abrir perfil @{username}: {exc}")
             return False
 
+    # resource-ids conhecidos para usernames em listas do Instagram
+    _USERNAME_RID_PATTERNS = [
+        "follow_list_username",
+        "row_user_textview",
+        "row_user_primary_name",
+    ]
+
+    def _extract_usernames_from_dump(self, dump: str, diag: bool = False) -> set[str]:
+        """Extrai usernames do dump XML da tela de lista do Instagram."""
+        found: set[str] = set()
+
+        # 1. Tentar resource-ids conhecidos
+        for rid_part in self._USERNAME_RID_PATTERNS:
+            for m in re.finditer(
+                rf'resource-id="[^"]*{rid_part}[^"]*"[^>]*text="([^"]+)"',
+                dump,
+            ):
+                u = m.group(1).strip().lower()
+                if u and not " " in u:
+                    found.add(u)
+
+        # 2. Fallback genérico: procurar TextViews dentro de linhas de lista
+        #    que parecem usernames (sem espaço, curto, dentro do pacote IG)
+        if not found:
+            for m in re.finditer(
+                r'resource-id="com\.instagram\.android:id/([^"]+)"[^>]*'
+                r'class="android\.widget\.TextView"[^>]*text="([^"]+)"',
+                dump,
+            ):
+                rid = m.group(1)
+                txt = m.group(2).strip()
+                # Pular textos que claramente não são usernames
+                if not txt or " " in txt or len(txt) > 30:
+                    continue
+                if txt.isdigit():
+                    continue
+                # Pular labels de botões e textos de UI
+                skip_words = [
+                    "seguir", "follow", "remover", "remove",
+                    "confirmar", "cancelar", "pesquisar", "search",
+                    "seguindo", "following", "seguidores", "followers",
+                    "voltar", "back", "fechar", "close",
+                ]
+                if txt.lower() in skip_words:
+                    continue
+                found.add(txt.lower())
+
+        if diag and not found:
+            # Dump dos primeiros resource-ids e textos pra debug
+            self._log("  [diag] Nenhum username encontrado. Elementos na tela:")
+            seen_rids: set[str] = set()
+            count = 0
+            for m in re.finditer(
+                r'resource-id="([^"]*)"[^>]*text="([^"]*)"', dump
+            ):
+                rid = m.group(1)
+                txt = m.group(2)
+                if rid and rid not in seen_rids and txt:
+                    seen_rids.add(rid)
+                    short_rid = rid.split("/")[-1] if "/" in rid else rid
+                    self._log(f"    [{short_rid}] = \"{txt[:50]}\"")
+                    count += 1
+                    if count >= 20:
+                        self._log("    ... (truncado)")
+                        break
+
+        return found
+
     def _collect_list_from_sheet(self, stop_flag: Callable[[], bool] | None = None) -> list[str]:
         """Coleta usernames da lista aberta (seguidores ou seguindo).
 
@@ -1217,6 +1285,7 @@ class AndroidStoryPoster:
         """
         all_users: set[str] = set()
         stale_rounds = 0
+        iteration = 0
 
         while stale_rounds < 5:
             if stop_flag and stop_flag():
@@ -1224,39 +1293,15 @@ class AndroidStoryPoster:
 
             before = len(all_users)
 
-            # Coletar usernames visíveis na tela
             try:
                 dump = self.d.dump_hierarchy()
             except Exception:
                 break
 
-            for m in re.finditer(
-                r'resource-id="[^"]*:id/follow_list_username"[^>]*text="([^"]+)"',
-                dump,
-            ):
-                u = m.group(1).strip().lower()
-                if u:
-                    all_users.add(u)
-
-            # Fallback: procurar por outros resource-ids comuns de username
-            if len(all_users) == before:
-                for m in re.finditer(
-                    r'resource-id="[^"]*:id/row_user_textview"[^>]*text="([^"]+)"',
-                    dump,
-                ):
-                    u = m.group(1).strip().lower()
-                    if u:
-                        all_users.add(u)
-
-            # Outro fallback: usernames genéricos em linhas de lista
-            if len(all_users) == before:
-                for m in re.finditer(
-                    r'resource-id="[^"]*:id/row_user_primary_name"[^>]*text="([^"]+)"',
-                    dump,
-                ):
-                    u = m.group(1).strip().lower()
-                    if u:
-                        all_users.add(u)
+            new_users = self._extract_usernames_from_dump(
+                dump, diag=(iteration == 0)
+            )
+            all_users.update(new_users)
 
             if len(all_users) == before:
                 stale_rounds += 1
@@ -1268,6 +1313,7 @@ class AndroidStoryPoster:
             w, h = self.d.window_size()
             self.d.swipe(w // 2, int(h * 0.7), w // 2, int(h * 0.3), 0.3)
             time.sleep(1.5)
+            iteration += 1
 
         return list(all_users)
 
