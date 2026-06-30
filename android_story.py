@@ -72,6 +72,7 @@ class AndroidStoryPoster:
         self.serial = serial
         self._log_fn = log or (lambda m: print(m))
         self.d: u2.Device | None = None  # type: ignore[name-defined]
+        self.android_version: str | None = None
 
     def _log(self, msg: str) -> None:
         self._log_fn(msg)
@@ -90,6 +91,7 @@ class AndroidStoryPoster:
             ver = self.d.shell(
                 "getprop ro.build.version.release"
             )[0].strip()
+            self.android_version = ver
             self._log(f"Android conectado (v{ver}).")
             self._grant_media_permissions()
             return True

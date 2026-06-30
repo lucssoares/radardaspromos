@@ -98,6 +98,10 @@ class App(ctk.CTk):
 
         self._build_ui()
 
+        # Status inicial do ML (persistent context em disco)
+        if self._ml_logged_in:
+            self._update_status_ml(True, "sessao salva")
+
         # Conecta Android (emulador) automaticamente ao abrir o app.
         # O bot (Chrome/Playwright) NÃO conecta mais automaticamente —
         # abria e fechava janelas do Chrome, incomodando o usuário.
@@ -476,6 +480,34 @@ class App(ctk.CTk):
             text_color="gray",
         ).pack(pady=(0, 6))
 
+        # ── Barra de status (conexões) ─────────────────────────────────────
+        status_frame = ctk.CTkFrame(tab, corner_radius=8)
+        status_frame.pack(padx=10, pady=(0, 6), fill="x")
+
+        # Instagram / LDPlayer
+        self._status_ig_dot = ctk.CTkLabel(
+            status_frame, text="\u2B24", font=ctk.CTkFont(size=12),
+            text_color="#F44336", width=16,
+        )
+        self._status_ig_dot.grid(row=0, column=0, padx=(12, 4), pady=8)
+        self._status_ig_label = ctk.CTkLabel(
+            status_frame, text="Instagram (LDPlayer): Desconectado",
+            font=ctk.CTkFont(size=12),
+        )
+        self._status_ig_label.grid(row=0, column=1, padx=(0, 24), pady=8, sticky="w")
+
+        # Mercado Livre
+        self._status_ml_dot = ctk.CTkLabel(
+            status_frame, text="\u2B24", font=ctk.CTkFont(size=12),
+            text_color="#F44336", width=16,
+        )
+        self._status_ml_dot.grid(row=0, column=2, padx=(0, 4), pady=8)
+        self._status_ml_label = ctk.CTkLabel(
+            status_frame, text="Mercado Livre: Desconectado",
+            font=ctk.CTkFont(size=12),
+        )
+        self._status_ml_label.grid(row=0, column=3, padx=(0, 12), pady=8, sticky="w")
+
         # ── Tag de afiliado ────────────────────────────────────────────────
         tag_frame = ctk.CTkFrame(tab)
         tag_frame.pack(padx=10, pady=(0, 4), fill="x")
@@ -720,6 +752,40 @@ class App(ctk.CTk):
     def _safe_log(self, msg: str) -> None:
         self.after(0, self._append_log, msg)
 
+    # ── Status visual de conexões ──────────────────────────────────────
+
+    def _update_status_ig(self, connected: bool, detail: str = "") -> None:
+        """Atualiza o indicador visual do Instagram/LDPlayer."""
+        def _do():
+            if connected:
+                self._status_ig_dot.configure(text_color="#4CAF50")
+                text = f"Instagram (LDPlayer): Conectado"
+                if detail:
+                    text += f" — {detail}"
+            else:
+                self._status_ig_dot.configure(text_color="#F44336")
+                text = "Instagram (LDPlayer): Desconectado"
+                if detail:
+                    text += f" — {detail}"
+            self._status_ig_label.configure(text=text)
+        self.after(0, _do)
+
+    def _update_status_ml(self, connected: bool, detail: str = "") -> None:
+        """Atualiza o indicador visual do Mercado Livre."""
+        def _do():
+            if connected:
+                self._status_ml_dot.configure(text_color="#4CAF50")
+                text = "Mercado Livre: Conectado"
+                if detail:
+                    text += f" — {detail}"
+            else:
+                self._status_ml_dot.configure(text_color="#F44336")
+                text = "Mercado Livre: Desconectado"
+                if detail:
+                    text += f" — {detail}"
+            self._status_ml_label.configure(text=text)
+        self.after(0, _do)
+
     def _append_unfollow_log(self, msg: str) -> None:
         self.unfollow_log_box.configure(state="normal")
         self.unfollow_log_box.insert("end", msg + "\n")
@@ -930,18 +996,22 @@ class App(ctk.CTk):
                 )
                 if poster.connect():
                     self._android = poster
+                    version = poster.android_version or "?"
                     self._safe_offers_log(
                         "Android conectado! Stories com sticker de link "
                         "usarão o app do Instagram."
                     )
+                    self._update_status_ig(True, f"v{version}")
                 else:
                     self._safe_offers_log(
                         "Falha ao conectar ao Android. "
                         "Verifique se o LDPlayer/Bluestacks está aberto e "
                         "o ADB está ativado nas configurações dele."
                     )
+                    self._update_status_ig(False)
             except Exception as exc:
                 self._safe_offers_log(f"Erro ao conectar: {exc}")
+                self._update_status_ig(False)
             finally:
                 self.after(
                     0,
@@ -1326,10 +1396,12 @@ class App(ctk.CTk):
                         "Login ML salvo! Links meli.la serao "
                         "gerados automaticamente."
                     )
+                    self._update_status_ml(True)
                 else:
                     self._safe_offers_log(
                         "Login ML nao detectado (janela fechada ou timeout)."
                     )
+                    self._update_status_ml(False, "login nao detectado")
 
                 try:
                     context.close()
@@ -1341,6 +1413,7 @@ class App(ctk.CTk):
                     pass
             except Exception as exc:
                 self._safe_offers_log(f"Erro no login ML: {exc}")
+                self._update_status_ml(False, "erro")
                 if context:
                     try:
                         context.close()
@@ -1388,6 +1461,7 @@ class App(ctk.CTk):
                     "  [ml] FALHA: redirecionou pro login (sessão expirada)"
                 )
                 self._ml_logged_in = False
+                self._update_status_ml(False, "sessao expirada")
                 return None
 
             # Preencher campo de URL
