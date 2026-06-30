@@ -1223,16 +1223,17 @@ class AndroidStoryPoster:
 
         # 1. Tentar resource-ids conhecidos
         for rid_part in self._USERNAME_RID_PATTERNS:
-            for m in re.finditer(
-                rf'resource-id="[^"]*{rid_part}[^"]*"[^>]*text="([^"]+)"',
-                dump,
-            ):
-                u = m.group(1).strip().lower()
-                if u and not " " in u:
-                    found.add(u)
+            # Tenta text="..." e content-desc="..."
+            for attr in ("text", "content-desc"):
+                for m in re.finditer(
+                    rf'resource-id="[^"]*{rid_part}[^"]*"[^>]*{attr}="([^"]+)"',
+                    dump,
+                ):
+                    u = m.group(1).strip().lower()
+                    if u and " " not in u and len(u) <= 30:
+                        found.add(u)
 
-        # 2. Fallback genérico: procurar TextViews dentro de linhas de lista
-        #    que parecem usernames (sem espaço, curto, dentro do pacote IG)
+        # 2. Fallback genérico: TextViews do Instagram que parecem usernames
         if not found:
             for m in re.finditer(
                 r'resource-id="com\.instagram\.android:id/([^"]+)"[^>]*'
@@ -1241,12 +1242,10 @@ class AndroidStoryPoster:
             ):
                 rid = m.group(1)
                 txt = m.group(2).strip()
-                # Pular textos que claramente não são usernames
                 if not txt or " " in txt or len(txt) > 30:
                     continue
                 if txt.isdigit():
                     continue
-                # Pular labels de botões e textos de UI
                 skip_words = [
                     "seguir", "follow", "remover", "remove",
                     "confirmar", "cancelar", "pesquisar", "search",
@@ -1257,24 +1256,55 @@ class AndroidStoryPoster:
                     continue
                 found.add(txt.lower())
 
+        # 3. Fallback mais amplo: qualquer TextView com text que parece username
+        #    (dentro do pacote Instagram, sem resource-id específico)
+        if not found:
+            for m in re.finditer(
+                r'package="com\.instagram\.android"[^>]*'
+                r'class="android\.widget\.TextView"[^>]*text="([^"]+)"',
+                dump,
+            ):
+                txt = m.group(1).strip()
+                if not txt or " " in txt or len(txt) > 30:
+                    continue
+                if txt.isdigit() or txt.startswith("#"):
+                    continue
+                skip_words = [
+                    "seguir", "follow", "remover", "remove",
+                    "confirmar", "cancelar", "pesquisar", "search",
+                    "seguindo", "following", "seguidores", "followers",
+                    "voltar", "back", "fechar", "close", "a seguir",
+                ]
+                if txt.lower() in skip_words:
+                    continue
+                found.add(txt.lower())
+
         if diag and not found:
-            # Dump dos primeiros resource-ids e textos pra debug
-            self._log("  [diag] Nenhum username encontrado. Elementos na tela:")
-            seen_rids: set[str] = set()
+            self._log("  [diag] Nenhum username encontrado. Dump XML parcial:")
+            # Mostrar TODOS os elementos com texto (primeiros 30)
             count = 0
             for m in re.finditer(
-                r'resource-id="([^"]*)"[^>]*text="([^"]*)"', dump
+                r'<node[^>]*text="([^"]+)"[^>]*/?>',
+                dump,
             ):
-                rid = m.group(1)
-                txt = m.group(2)
-                if rid and rid not in seen_rids and txt:
-                    seen_rids.add(rid)
-                    short_rid = rid.split("/")[-1] if "/" in rid else rid
-                    self._log(f"    [{short_rid}] = \"{txt[:50]}\"")
-                    count += 1
-                    if count >= 20:
-                        self._log("    ... (truncado)")
-                        break
+                txt = m.group(1).strip()
+                if not txt:
+                    continue
+                # Extrair resource-id e class se disponíveis
+                node_str = m.group(0)
+                rid_m = re.search(r'resource-id="([^"]*)"', node_str)
+                cls_m = re.search(r'class="([^"]*)"', node_str)
+                rid = (rid_m.group(1).split("/")[-1] if rid_m and rid_m.group(1) else "-")
+                cls = (cls_m.group(1).split(".")[-1] if cls_m else "-")
+                self._log(f"    [{rid}] ({cls}) = \"{txt[:60]}\"")
+                count += 1
+                if count >= 30:
+                    self._log("    ... (truncado em 30)")
+                    break
+            if count == 0:
+                self._log("    (nenhum elemento com texto encontrado no dump)")
+                # Mostrar tamanho do dump pra saber se veio algo
+                self._log(f"    dump size: {len(dump)} chars")
 
         return found
 
@@ -1286,6 +1316,19 @@ class AndroidStoryPoster:
         all_users: set[str] = set()
         stale_rounds = 0
         iteration = 0
+
+        # Esperar a lista carregar (até 8 segundos)
+        self._log("  Aguardando lista carregar...")
+        for _ in range(4):
+            time.sleep(2)
+            try:
+                dump = self.d.dump_hierarchy()
+            except Exception:
+                continue
+            # Verificar se há elementos suficientes (lista carregada)
+            text_count = len(re.findall(r'text="[^"]+"', dump))
+            if text_count > 10:
+                break
 
         while stale_rounds < 5:
             if stop_flag and stop_flag():
@@ -1309,10 +1352,10 @@ class AndroidStoryPoster:
                 stale_rounds = 0
                 self._log(f"  {len(all_users)} perfis coletados...")
 
-            # Scroll pra baixo
+            # Scroll pra baixo (swipe mais longo pra garantir)
             w, h = self.d.window_size()
-            self.d.swipe(w // 2, int(h * 0.7), w // 2, int(h * 0.3), 0.3)
-            time.sleep(1.5)
+            self.d.swipe(w // 2, int(h * 0.75), w // 2, int(h * 0.25), 0.5)
+            time.sleep(2)
             iteration += 1
 
         return list(all_users)
@@ -1339,11 +1382,12 @@ class AndroidStoryPoster:
         self._log(f"Abrindo perfil @{my_username}...")
         if not self._open_profile(my_username):
             return []
-        time.sleep(2)
+        time.sleep(4)
 
         # Clicar em "Seguindo" / "Following" / "A seguir" (PT-PT)
         self._log("Abrindo lista de 'seguindo'...")
         found = False
+        # Tentar text (com e sem clickable) — Instagram mostra número e label juntos
         for label in ["seguindo", "following", "a seguir"]:
             el = self.d(textContains=label, clickable=True)
             if el.exists:
@@ -1351,9 +1395,17 @@ class AndroidStoryPoster:
                 found = True
                 break
         if not found:
+            # Sem clickable=True (pode ser child de container clickable)
+            for label in ["seguindo", "following", "a seguir"]:
+                el = self.d(textContains=label)
+                if el.exists:
+                    el.click()
+                    found = True
+                    break
+        if not found:
             # Tentar por content-desc
             for label in ["seguindo", "following", "a seguir"]:
-                el = self.d(descriptionContains=label, clickable=True)
+                el = self.d(descriptionContains=label)
                 if el.exists:
                     el.click()
                     found = True
@@ -1362,7 +1414,7 @@ class AndroidStoryPoster:
             self._log("Não encontrei o botão 'seguindo'.")
             return []
 
-        time.sleep(3)
+        time.sleep(4)
         self._log("Coletando lista de 'seguindo'...")
         users = self._collect_list_from_sheet(stop_flag)
         users = [u for u in users if u != my_username.lower()]
@@ -1382,7 +1434,7 @@ class AndroidStoryPoster:
         self._log(f"Abrindo perfil @{my_username}...")
         if not self._open_profile(my_username):
             return []
-        time.sleep(2)
+        time.sleep(4)
 
         # Clicar em "Seguidores" / "Followers"
         self._log("Abrindo lista de seguidores...")
@@ -1395,7 +1447,14 @@ class AndroidStoryPoster:
                 break
         if not found:
             for label in ["seguidor", "follower"]:
-                el = self.d(descriptionContains=label, clickable=True)
+                el = self.d(textContains=label)
+                if el.exists:
+                    el.click()
+                    found = True
+                    break
+        if not found:
+            for label in ["seguidor", "follower"]:
+                el = self.d(descriptionContains=label)
                 if el.exists:
                     el.click()
                     found = True
@@ -1404,7 +1463,7 @@ class AndroidStoryPoster:
             self._log("Não encontrei o botão 'seguidores'.")
             return []
 
-        time.sleep(3)
+        time.sleep(4)
         self._log("Coletando lista de seguidores...")
         users = self._collect_list_from_sheet(stop_flag)
         users = [u for u in users if u != my_username.lower()]
