@@ -334,7 +334,7 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(
             tab,
-            text="Deixa de seguir quem não te segue de volta após X dias",
+            text="Deixa de seguir quem não te segue de volta",
             font=ctk.CTkFont(size=12),
             text_color="gray",
         ).pack(pady=(0, 8))
@@ -358,25 +358,6 @@ class App(ctk.CTk):
 
         # Tentar preencher @ automaticamente do token salvo
         self._try_autofill_username()
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Dias mínimos:",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=1, column=0, padx=12, pady=4, sticky="w")
-
-        self.days_entry = ctk.CTkEntry(
-            config_frame, placeholder_text="3", width=80
-        )
-        self.days_entry.insert(0, "3")
-        self.days_entry.grid(row=1, column=1, padx=12, pady=4, sticky="w")
-
-        ctk.CTkLabel(
-            config_frame,
-            text="(só faz unfollow se seguiu há mais de X dias)",
-            font=ctk.CTkFont(size=11),
-            text_color="#FF9800",
-        ).grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w")
 
         # ── Info dos follows registrados ──────────────────────────────────
         self.follow_count_label = ctk.CTkLabel(
@@ -1139,11 +1120,6 @@ class App(ctk.CTk):
             )
             return
 
-        try:
-            days = int(self.days_entry.get().strip())
-        except (ValueError, AttributeError):
-            days = 3
-
         self._bot._stop_requested = False
         self._bot.on_log = self._safe_unfollow_log
         self.unfollow_btn.configure(state="disabled")
@@ -1153,7 +1129,7 @@ class App(ctk.CTk):
 
         def _task():
             try:
-                self._bot.unfollow_non_followers(my_user, days)
+                self._bot.unfollow_non_followers(my_user)
             except Exception as exc:
                 self._safe_unfollow_log(f"Erro: {exc}")
             finally:
