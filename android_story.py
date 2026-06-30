@@ -191,7 +191,7 @@ class AndroidStoryPoster:
     # ── Imagem → galeria ─────────────────────────────────────────────────
     def push_image(self, local_path: str) -> str:
         """Envia a imagem pro dispositivo e registra no MediaStore."""
-        base = os.path.basename(local_path) or "radar_story.jpg"
+        base = os.path.basename(local_path) or "story_compose.jpg"
         root, ext = os.path.splitext(base)
         # Nome único por postagem: evita pegar um _id antigo do MediaStore
         # quando o mesmo nome já foi enviado em postagens anteriores.
@@ -238,7 +238,7 @@ class AndroidStoryPoster:
                 "am start -a com.instagram.share.ADD_TO_STORY "
                 "-t image/jpeg "
                 f"-d {uri} "
-                "--es source_application com.radardaspromos "
+                "--es source_application com.onlinenapromo "
                 "--grant-read-uri-permission"
             )
         except Exception as exc:

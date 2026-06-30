@@ -1,9 +1,8 @@
 """
-Instagram Auto-Follow — Aplicativo Desktop.
+Online na Promo — Aplicativo Desktop.
 
-Interface gráfica para o bot de automação de follow no Instagram.
-Usa CDP para conectar ao Chrome real do usuário.
-Inclui dashboard de métricas via Instagram Graph API.
+Interface gráfica para automação de follow, limpeza de desumildes
+e postagem de ofertas no Instagram via LDPlayer.
 """
 
 import os
@@ -43,13 +42,13 @@ def resource_path(rel_path: str) -> str:
     return os.path.join(base, rel_path)
 
 
-# Fundo padrão usado nos stories (Radar das Promos).
+# Fundo padrão usado nos stories (Online na Promo).
 STORY_BG_PATH = resource_path(os.path.join("assets", "story_bg.jpg"))
 FONT_REGULAR = resource_path(os.path.join("assets", "DejaVuSans.ttf"))
 FONT_BOLD = resource_path(os.path.join("assets", "DejaVuSans-Bold.ttf"))
 
 # Onde a imagem composta do story é salva antes de subir.
-_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".instafollow_bot")
+_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".onlinenapromo")
 STORY_OUT_PATH = os.path.join(_APP_DATA_DIR, "story_compose.jpg")
 
 
@@ -71,7 +70,7 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Instagram Auto-Follow Bot")
+        self.title("Online na Promo")
         self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
         # Janela redimensionável (antes era fixa e cortava em telas menores).
         self.resizable(True, True)
@@ -162,14 +161,14 @@ class App(ctk.CTk):
     def _build_ui(self) -> None:
         title = ctk.CTkLabel(
             self,
-            text="Instagram Auto-Follow Bot",
+            text="Online na Promo",
             font=ctk.CTkFont(size=22, weight="bold"),
         )
         title.pack(pady=(18, 4))
 
         subtitle = ctk.CTkLabel(
             self,
-            text="Siga automaticamente seguidores de um perfil",
+            text="Follow, unfollow e ofertas de afiliados via LDPlayer",
             font=ctk.CTkFont(size=13),
             text_color="gray",
         )
@@ -181,7 +180,7 @@ class App(ctk.CTk):
 
         self.tab_bot = self.tabview.add("Bot de Follow")
         self.tab_unfollow = self.tabview.add("Limpar Desumildes")
-        self.tab_offers = self.tabview.add("Radar de Ofertas")
+        self.tab_offers = self.tabview.add("Ofertas")
 
         self._build_bot_tab()
         self._build_unfollow_tab()
@@ -432,15 +431,15 @@ class App(ctk.CTk):
             text = f"{count} follows registrados no histórico."
         self.follow_count_label.configure(text=text)
 
-    # ── Aba Radar de Ofertas ─────────────────────────────────────────────
+    # ── Aba Ofertas ──────────────────────────────────────────────────────
 
     def _build_offers_tab(self) -> None:
-        """Constrói a aba do Radar de Ofertas (ML → Instagram)."""
+        """Constrói a aba de Ofertas (ML → Instagram)."""
         tab = self.tab_offers
 
         ctk.CTkLabel(
             tab,
-            text="Radar de Ofertas",
+            text="Ofertas",
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(pady=(10, 2))
 
@@ -1106,7 +1105,7 @@ class App(ctk.CTk):
 
         if not self._android:
             self._append_unfollow_log(
-                "LDPlayer não conectado! Conecte na aba Radar de Ofertas."
+                "LDPlayer não conectado! Conecte na aba Ofertas."
             )
             return
 
@@ -1232,7 +1231,7 @@ class App(ctk.CTk):
         self.after(0, self._append_offers_log, msg)
 
     def _copy_offers_log(self) -> None:
-        """Copia todo o log do Radar pra área de transferência."""
+        """Copia todo o log de Ofertas pra área de transferência."""
         try:
             content = self.offers_log_box.get("1.0", "end").strip()
             self.clipboard_clear()
@@ -1242,7 +1241,7 @@ class App(ctk.CTk):
             self._append_offers_log(f"[Erro ao copiar log: {exc}]")
 
     def _clear_offers_log(self) -> None:
-        """Limpa o log do Radar."""
+        """Limpa o log de Ofertas."""
         self.offers_log_box.configure(state="normal")
         self.offers_log_box.delete("1.0", "end")
         self.offers_log_box.configure(state="disabled")

@@ -1,5 +1,5 @@
 """
-Instagram Auto-Follow Bot usando Playwright.
+Online na Promo — Bot de follow usando Playwright.
 
 Automatiza o processo de seguir os seguidores de um perfil específico.
 """
@@ -257,7 +257,7 @@ def run() -> None:
         sys.exit(1)
 
     logger.info("=" * 60)
-    logger.info("Instagram Auto-Follow Bot")
+    logger.info("Online na Promo")
     logger.info("Perfil alvo: @%s", TARGET_PROFILE)
     logger.info("Máximo de follows: %d", MAX_FOLLOWS)
     logger.info("Delay entre ações: %d-%d segundos", MIN_DELAY, MAX_DELAY)

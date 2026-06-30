@@ -1,4 +1,4 @@
-"""Composição da imagem do story do Radar das Promos.
+"""Composição da imagem do story do Online na Promo.
 
 Monta um story 1080x1920 com o fundo fixo + a imagem do produto
 (pequena, centralizada) + o link curto logo abaixo da imagem.

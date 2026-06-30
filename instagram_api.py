@@ -22,7 +22,7 @@ BASE_URL_IG = f"https://graph.instagram.com/{API_VERSION}"
 
 # Diretório persistente para dados do bot (home do usuário)
 # Usa a pasta do usuário para que os dados persistam mesmo ao rodar como .exe
-_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".instafollow_bot")
+_APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".onlinenapromo")
 os.makedirs(_APP_DATA_DIR, exist_ok=True)
 
 HISTORY_FILE = os.path.join(_APP_DATA_DIR, "metrics_history.json")
@@ -161,7 +161,7 @@ class InstagramAPI:
         separator = "&" if "?" in url else "?"
         full_url = f"{url}{separator}access_token={self.access_token}"
         req = Request(full_url)
-        req.add_header("User-Agent", "InstaFollowBot/1.0")
+        req.add_header("User-Agent", "OnlineNaPromo/1.0")
         try:
             with urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode())
@@ -174,7 +174,7 @@ class InstagramAPI:
         data["access_token"] = self.access_token
         body = urlencode(data).encode("utf-8")
         req = Request(url, data=body, method="POST")
-        req.add_header("User-Agent", "InstaFollowBot/1.0")
+        req.add_header("User-Agent", "OnlineNaPromo/1.0")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
             with urlopen(req, timeout=30) as resp:
@@ -204,7 +204,7 @@ class InstagramAPI:
                 })
                 url = f"https://graph.instagram.com/access_token?{params}"
                 req = Request(url)
-                req.add_header("User-Agent", "InstaFollowBot/1.0")
+                req.add_header("User-Agent", "OnlineNaPromo/1.0")
                 with urlopen(req, timeout=15) as resp:
                     data = json.loads(resp.read().decode())
             except HTTPError:
@@ -221,7 +221,7 @@ class InstagramAPI:
                 f"/oauth/access_token?{params}"
             )
             req = Request(url)
-            req.add_header("User-Agent", "InstaFollowBot/1.0")
+            req.add_header("User-Agent", "OnlineNaPromo/1.0")
             try:
                 with urlopen(req, timeout=15) as resp:
                     data = json.loads(resp.read().decode())
@@ -275,7 +275,7 @@ class InstagramAPI:
         })
         url = f"https://graph.instagram.com/refresh_access_token?{params}"
         req = Request(url)
-        req.add_header("User-Agent", "InstaFollowBot/1.0")
+        req.add_header("User-Agent", "OnlineNaPromo/1.0")
         try:
             with urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
@@ -451,8 +451,8 @@ class InstagramAPI:
     def publish_story_image(self, local_path: str) -> dict:
         """Sobe uma imagem local p/ URL pública e publica como story.
 
-        Útil para publicar uma imagem fixa (ex.: fundo do Radar das
-        Promos) em tela cheia, sem depender de um produto.
+        Útil para publicar uma imagem fixa (ex.: fundo do Online na
+        Promo) em tela cheia, sem depender de um produto.
         """
         public_url = upload_image_public(local_path)
         return self.publish_story(public_url)

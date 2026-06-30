@@ -1,6 +1,6 @@
-# Instagram Auto-Follow Bot (Radar das Promos)
+# Online na Promo
 
-Aplicativo desktop com interface gráfica para seguir automaticamente os seguidores de um perfil no Instagram, usando **Playwright + CDP** para conectar ao Chrome real do usuário.
+Aplicativo desktop para automação de follow/unfollow no Instagram e postagem de ofertas de afiliados via **LDPlayer** (emulador Android).
 
 ## Aviso Legal
 
@@ -9,67 +9,42 @@ Este projeto é **apenas para fins educacionais**. O uso de automação viola os
 ## Funcionalidades
 
 - **Interface gráfica** moderna com CustomTkinter (tema escuro)
-- **Login manual seguro**: o app abre o Chrome real do sistema, você faz login normalmente (sem salvar senha)
-- **Filtro inteligente**: só segue perfis onde `seguindo > seguidores` (maior chance de follow-back)
-- **Anti-detecção**: usa Chrome real via CDP (Chrome DevTools Protocol), não Chromium do Playwright
-- **Sessão persistente**: login salvo em `chrome_bot_profile/` (só precisa logar uma vez)
-- **Delays aleatórios** configuráveis para simular comportamento humano
-- **Limite de follows** por sessão
-- **Barra de progresso** e log em tempo real
-- **Botão de parar** para interromper a qualquer momento
-- **Dashboard de métricas**: acompanhe seguidores ganhos/perdidos via Instagram Graph API (requer conta profissional)
-- **Limpar Desumildes**: deixa de seguir quem não segue de volta após X dias
-- **Radar de Ofertas**: extraia dados de produtos do Mercado Livre, gere links de afiliado e poste como story/post no Instagram
+- **Bot de Follow**: segue automaticamente seguidores de um perfil (filtro inteligente)
+- **Limpar Desumildes**: deixa de seguir quem não segue de volta (via LDPlayer)
+- **Ofertas**: busca ofertas do Mercado Livre, gera links meli.la de afiliado e posta stories no Instagram via LDPlayer
+- **Conexão automática** ao emulador LDPlayer (sem cabo, sem celular)
+- **Login ML persistente**: loga uma vez no Mercado Livre e fica logado por meses
+- **Status visual**: indicadores LED de conexão (Instagram/LDPlayer e Mercado Livre)
 
 ## Como funciona
 
 ### Bot de Follow
 
-1. Clique em **"Abrir Chrome e Logar"** — abre o Chrome com perfil dedicado do bot
-2. Faça login no Instagram (pode usar 2FA normalmente)
+1. Clique em **"Abrir Chrome e Logar"** — abre o Chrome com perfil dedicado
+2. Faça login no Instagram
 3. Defina o **perfil alvo** e clique em **"Iniciar Follow"**
-4. O bot navega até o perfil alvo, abre a lista de seguidores e:
-   - Para cada seguidor, verifica se `seguindo > seguidores`
-   - Se sim, segue o perfil (maior chance de follow-back)
-   - Se não, pula para o próximo
+4. O bot segue perfis onde `seguindo > seguidores` (maior chance de follow-back)
 
 ### Limpar Desumildes (Unfollow)
 
-1. Na aba **"Limpar Desumildes"**, coloque seu @ e o número de dias mínimos (padrão: 3)
-2. Na **primeira execução**, o bot mapeia todos que você segue e registra com a data de hoje
-3. Após X dias, execute novamente — o bot verifica quem não segue de volta e faz unfollow
-4. Os registros ficam salvos em `~/.instafollow_bot/follow_log.json`
+1. Na aba **"Limpar Desumildes"**, coloque seu @
+2. Clique **"Limpar Desumildes"**
+3. O programa coleta quem você segue e quem te segue pelo app Instagram no LDPlayer
+4. Faz unfollow automático de quem não te segue de volta
 
-### Radar de Ofertas (Mercado Livre → Instagram)
+### Ofertas (Mercado Livre → Instagram)
 
-1. Conecte o bot (aba Bot de Follow → Conectar Bot)
-2. Na aba **"Radar de Ofertas"**, cole a URL de um produto do Mercado Livre
-3. Preencha sua **tag de afiliado** (encontre no Portal do Afiliado do ML)
-4. Clique **"Extrair Dados"** — o bot abre o produto e captura título, preço e imagem
-5. Escolha uma ação:
-   - **Postar Story**: publica a imagem do produto como story no Instagram (via API)
-   - **Postar no Feed**: publica como post com legenda e link de afiliado (via API)
-   - **Copiar p/ WhatsApp**: copia mensagem formatada para compartilhar
-
-**Nota**: Para postar no Instagram via API, você precisa da permissão `instagram_business_content_publish` no seu token do Meta.
-
-### Dashboard de Métricas
-
-Para usar o dashboard, você precisa de uma **conta profissional** (Business/Creator) no Instagram:
-
-1. Na aba **"Dashboard de Métricas"**, cole seu **Access Token** do Meta
-2. Clique **"Conectar à API"** — seus dados são carregados automaticamente
-3. Use **"Atualizar Métricas"** para registrar novos dados
-4. Use **"Ver Histórico"** para acompanhar a evolução dos seguidores
-
-Para obter o Access Token: acesse [Graph API Explorer](https://developers.facebook.com/tools/explorer/), selecione seu app e as permissões `instagram_business_basic`, `instagram_business_manage_insights` e `instagram_business_content_publish`.
+1. Clique **"Login ML"** (uma vez só — sessão persiste por meses)
+2. Clique **"Buscar Ofertas"** (com ou sem palavra-chave)
+3. Selecione produtos e clique **"Postar Selecionado"**
+4. O programa gera link meli.la, monta a imagem do story e posta via LDPlayer
 
 ## Pré-requisitos
 
-- Python 3.12 ou 3.13 (**NÃO** usar 3.14 beta)
-- Google Chrome instalado
+- Python 3.12 ou 3.13
+- LDPlayer instalado com Instagram logado
+- ADB ativado no LDPlayer (Configurações > Outros > Conexão ADB via rede local)
 - pip
-- Conta profissional no Instagram (para o dashboard de métricas)
 
 ## Instalação
 
@@ -86,7 +61,7 @@ source venv/bin/activate  # Linux/Mac
 # 3. Instale as dependências
 pip install -r requirements.txt
 
-# 4. Instale o navegador do Playwright
+# 4. Instale o navegador do Playwright (para scraping ML)
 playwright install chromium
 ```
 
@@ -96,41 +71,41 @@ playwright install chromium
 python app.py
 ```
 
-**Nota**: Pode manter seu Chrome normal aberto — o bot abre uma janela separada.
+O programa conecta automaticamente ao LDPlayer ao abrir.
 
 ## Gerar executável (.exe)
 
 ```bash
-pyinstaller --onefile --windowed --name "InstaFollowBot" --collect-all customtkinter --add-data "assets;assets" app.py
+pyinstaller --onefile --windowed --name "OnlineNaPromo" --collect-all customtkinter --add-data "assets;assets" app.py
 ```
 
-> No Windows o separador de `--add-data` é `;` (ponto e vírgula), como acima.
+> No Windows o separador de `--add-data` é `;` (ponto e vírgula).
 > No Linux/macOS use `:` → `--add-data "assets:assets"`.
-> O `--add-data` embute a imagem de fundo dos stories (`assets/story_bg.jpg`).
 
 O executável será gerado na pasta `dist/`.
 
-## Configurações
+## Configurações LDPlayer (leve)
 
-| Parâmetro | Padrão | Descrição |
-|-----------|--------|-----------|
-| Perfil alvo | — | Perfil de quem pegar os seguidores |
-| Máx. follows | 20 | Limite de follows por sessão |
-| Delay mínimo | 3s | Tempo mínimo entre ações |
-| Delay máximo | 8s | Tempo máximo entre ações |
+| Parâmetro | Valor recomendado |
+|-----------|-------------------|
+| CPU | 1 core |
+| RAM | 2 GB |
+| Resolução | 540x960 |
+| ADB | Ativado |
 
 ## Estrutura do Projeto
 
 ```
-radardaspromos/
+onlinenapromo/
 ├── app.py                # Aplicativo GUI (CustomTkinter)
-├── bot.py                # Lógica do bot (Playwright + CDP)
-├── instagram_api.py      # Módulo de métricas + stories (Instagram Graph API)
-├── mercadolivre.py       # Extração de dados do Mercado Livre + link de afiliado
+├── bot.py                # Lógica do bot de follow (Playwright + CDP)
+├── android_story.py      # Postagem de stories e unfollow via LDPlayer
+├── story_image.py        # Composição da imagem do story
+├── mercadolivre.py       # Scraping de ofertas + geração de link meli.la
+├── instagram_api.py      # Módulo legado (Instagram Graph API)
 ├── instagram_follow.py   # Versão CLI (linha de comando)
 ├── requirements.txt      # Dependências Python
-├── .env.example          # Template de configuração (para CLI)
-├── .gitignore            # Arquivos ignorados pelo git
+├── assets/               # Recursos (fundo do story, fontes)
 └── README.md             # Este arquivo
 ```
 
@@ -141,14 +116,3 @@ radardaspromos/
 - **Não execute mais de 1-2 vezes por dia**
 - **Máximo de 50-100 follows por dia** no total
 - **Monitore sua conta** para sinais de restrição
-
-## Solução de Problemas
-
-| Problema | Solução |
-|----------|---------|
-| Chrome não abre | Verifique se o Google Chrome está instalado |
-| Porta de debug não responde | Feche todas as janelas do Chrome e tente novamente |
-| Login não detectado | Aguarde a página carregar totalmente após logar |
-| Perfil não encontrado | Verifique se o nome está correto (sem @ e sem URL) |
-| Bloqueio temporário | Pare o bot e aguarde 24-48h |
-| Erro de greenlet/compilação | Use Python 3.12 ou 3.13 (não 3.14) |

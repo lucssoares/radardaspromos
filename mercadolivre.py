@@ -504,7 +504,7 @@ def format_instagram_caption(
         f"Link na bio ou acesse: {affiliate_link}",
         "",
         "#ofertas #promoção #mercadolivre #desconto "
-        "#radardaspromos #ofertadodia",
+        "#onlinenapromo #ofertadodia",
     ])
 
     return "\n".join(lines)
