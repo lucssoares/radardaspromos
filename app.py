@@ -1472,158 +1472,151 @@ class App(ctk.CTk):
         t.start()
 
     def _generate_meli_la_link(self, product_url: str, tag: str) -> str | None:
-        """Gera link meli.la via UI do linkbuilder (persistent context).
+        """Gera link meli.la via API interna do ML (persistent context).
 
-        Navega pro linkbuilder, preenche a URL, clica 'Gerar', lê o resultado.
-        Retorna o link meli.la ou None se falhar.
+        Usa a API /affiliate-program/api/v2/affiliates/createLink
+        chamada via fetch() dentro do contexto autenticado do Playwright.
         """
         import re as _re
+        import json as _json
 
         try:
             page = self._get_ml_page()
             cur = (page.url or "").lower()
-            if "afiliados/linkbuilder" not in cur:
-                self._safe_offers_log("  [ml] navegando pro linkbuilder...")
+
+            # Navegar pro linkbuilder pra garantir cookies e CSRF
+            if "mercadolivre" not in cur:
+                self._safe_offers_log("  [ml] navegando pro ML...")
                 page.goto(
                     "https://www.mercadolivre.com.br/afiliados/linkbuilder",
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
-                _time.sleep(3)
+                _time.sleep(2)
 
             # Verificar se está logado
             cur_url = page.url or ""
-            self._safe_offers_log(f"  [ml] URL atual: {cur_url[:80]}")
+            self._safe_offers_log(f"  [ml] URL: {cur_url[:80]}")
             if "login" in cur_url.lower() or "signin" in cur_url.lower():
                 self._safe_offers_log(
-                    "  [ml] FALHA: redirecionou pro login (sessão expirada)"
+                    "  [ml] sessão expirada (redirecionou pro login)"
                 )
                 self._ml_logged_in = False
                 self._update_status_ml(False, "sessao expirada")
                 return None
 
-            # Preencher campo de URL — tentar múltiplos seletores
-            url_filled = False
-            try:
-                # Tentar por placeholder
-                url_input = page.locator(
-                    'input[type="text"], input[type="url"], '
-                    'input[placeholder*="url" i], input[placeholder*="link" i], '
-                    'input[placeholder*="cole" i], input[placeholder*="insira" i], '
-                    'input[placeholder*="http" i]'
-                ).first
-                url_input.wait_for(state="visible", timeout=10000)
-                url_input.fill("")
-                _time.sleep(0.3)
-                url_input.fill(product_url)
-                url_filled = True
-                self._safe_offers_log("  [ml] URL preenchida no campo.")
-            except Exception:
-                pass
+            # Chamar API createLink via fetch() no contexto da página
+            self._safe_offers_log("  [ml] chamando API createLink...")
+            js_code = """
+            async (args) => {
+                const [productUrl, affiliateTag] = args;
+                try {
+                    // Pegar CSRF token do cookie ou meta
+                    let csrf = '';
+                    const csrfCookie = document.cookie
+                        .split(';')
+                        .map(c => c.trim())
+                        .find(c => c.startsWith('_csrf='));
+                    if (csrfCookie) {
+                        csrf = csrfCookie.split('=')[1];
+                    }
+                    // Tentar meta tag
+                    if (!csrf) {
+                        const meta = document.querySelector(
+                            'meta[name="csrf-token"]'
+                        );
+                        if (meta) csrf = meta.getAttribute('content') || '';
+                    }
 
-            if not url_filled:
+                    const resp = await fetch(
+                        '/affiliate-program/api/v2/affiliates/createLink',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json',
+                                'x-csrf-token': csrf,
+                            },
+                            credentials: 'include',
+                            body: JSON.stringify({
+                                urls: [productUrl],
+                                tag: affiliateTag,
+                            }),
+                        }
+                    );
+                    const text = await resp.text();
+                    return {
+                        status: resp.status,
+                        body: text,
+                    };
+                } catch (err) {
+                    return {status: 0, body: err.message};
+                }
+            }
+            """
+            result = page.evaluate(js_code, [product_url, tag])
+            status = result.get("status", 0)
+            body = result.get("body", "")
+            self._safe_offers_log(f"  [ml] API status: {status}")
+
+            if status == 200:
                 try:
-                    # Tentar por role textbox
-                    url_input = page.get_by_role(
-                        "textbox",
-                        name=_re.compile(r"url|link|insira|cole|http", _re.IGNORECASE),
+                    data = _json.loads(body)
+                    # Resposta pode ser: {"links": [{"url": "https://meli.la/..."}]}
+                    # ou {"url": "https://meli.la/..."} ou lista direta
+                    if isinstance(data, dict):
+                        # Tentar extrair link de várias estruturas
+                        links = data.get("links", [])
+                        if links and isinstance(links, list):
+                            link = links[0]
+                            if isinstance(link, dict):
+                                url = link.get("url") or link.get(
+                                    "shortUrl"
+                                ) or link.get("short_url", "")
+                            else:
+                                url = str(link)
+                            if url:
+                                self._safe_offers_log(
+                                    f"  [ml] link: {url[:80]}"
+                                )
+                                return url
+                        # Tentar campo direto
+                        url = data.get("url") or data.get(
+                            "shortUrl"
+                        ) or data.get("short_url", "")
+                        if url:
+                            self._safe_offers_log(
+                                f"  [ml] link: {url[:80]}"
+                            )
+                            return url
+                    # Procurar meli.la no body inteiro
+                    meli = _re.search(
+                        r"https?://meli\.la/[^\s\"'<>]+", body
                     )
-                    url_input.wait_for(state="visible", timeout=5000)
-                    url_input.fill("")
-                    _time.sleep(0.3)
-                    url_input.fill(product_url)
-                    url_filled = True
-                    self._safe_offers_log("  [ml] URL preenchida (role).")
-                except Exception as exc:
-                    self._safe_offers_log(
-                        f"  [ml] campo de URL não encontrado: {exc}"
-                    )
-                    return None
-
-            # Clicar em 'Gerar' / 'Criar' — tentar múltiplos seletores
-            btn_clicked = False
-            try:
-                gen_btn = page.locator(
-                    'button:has-text("Gerar"), button:has-text("gerar"), '
-                    'button:has-text("Criar"), button:has-text("criar"), '
-                    'button:has-text("Generate")'
-                ).first
-                gen_btn.wait_for(state="visible", timeout=5000)
-                gen_btn.click()
-                btn_clicked = True
-                self._safe_offers_log("  [ml] cliquei em 'Gerar'.")
-            except Exception:
-                pass
-
-            if not btn_clicked:
-                try:
-                    gen_btn = page.get_by_role(
-                        "button",
-                        name=_re.compile(r"gerar|criar|generate", _re.IGNORECASE),
-                    )
-                    gen_btn.wait_for(state="visible", timeout=5000)
-                    gen_btn.click()
-                    btn_clicked = True
-                    self._safe_offers_log("  [ml] cliquei em 'Gerar' (role).")
-                except Exception as exc:
-                    self._safe_offers_log(
-                        f"  [ml] botão 'Gerar' não encontrado: {exc}"
-                    )
-                    return None
-
-            # Aguardar link aparecer (meli.la ou https://)
-            _time.sleep(5)
-
-            # Tentar pegar o link do resultado
-            try:
-                # Procurar elemento que contenha meli.la
-                link_el = page.locator('text=/meli\\.la/').first
-                link_el.wait_for(state="visible", timeout=10000)
-                link_text = link_el.text_content() or ""
-                # Extrair URL do texto
-                meli_m = _re.search(
-                    r"https?://meli\.la/[^\s\"'<>]+", link_text
-                )
-                if meli_m:
-                    self._safe_offers_log(
-                        f"  [ml] link gerado: {meli_m.group(0)}"
-                    )
-                    return meli_m.group(0)
-                if link_text.strip().startswith("http"):
-                    self._safe_offers_log(
-                        f"  [ml] link gerado: {link_text.strip()[:80]}"
-                    )
-                    return link_text.strip()
-            except Exception:
-                pass
-
-            # Fallback: procurar qualquer meli.la no HTML da página
-            html = page.content()
-            meli = _re.search(r"https?://meli\.la/[^\s\"'<>]+", html)
-            if meli:
-                self._safe_offers_log(f"  [ml] link (html): {meli.group(0)}")
-                return meli.group(0)
-
-            # Fallback 2: procurar input com valor que contenha meli.la
-            try:
-                inputs = page.locator("input").all()
-                for inp in inputs:
-                    val = inp.get_attribute("value") or ""
-                    if "meli.la" in val:
+                    if meli:
                         self._safe_offers_log(
-                            f"  [ml] link (input): {val[:80]}"
+                            f"  [ml] link (regex): {meli.group(0)}"
                         )
-                        return val.strip()
-            except Exception:
-                pass
+                        return meli.group(0)
+                    self._safe_offers_log(
+                        f"  [ml] resposta 200 sem link: {body[:120]}"
+                    )
+                except _json.JSONDecodeError:
+                    # Não é JSON, procurar link no texto
+                    meli = _re.search(
+                        r"https?://meli\.la/[^\s\"'<>]+", body
+                    )
+                    if meli:
+                        return meli.group(0)
+                    self._safe_offers_log(
+                        f"  [ml] resposta não-JSON: {body[:120]}"
+                    )
+            else:
+                self._safe_offers_log(f"  [ml] erro API: {body[:120]}")
+                if status in (401, 403):
+                    self._ml_logged_in = False
+                    self._update_status_ml(False, "sessao expirada")
 
-            # Debug: mostrar o que está na página
-            self._safe_offers_log("  [ml] nenhum link meli.la encontrado.")
-            try:
-                title = page.title()
-                self._safe_offers_log(f"  [ml] titulo pagina: {title[:60]}")
-            except Exception:
-                pass
             return None
         except Exception as exc:
             self._safe_offers_log(f"  [ml] exceção: {exc}")
