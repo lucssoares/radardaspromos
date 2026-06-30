@@ -19,12 +19,10 @@ from bot import (
     launch_chrome_for_login,
     launch_chrome_with_debug,
     load_follow_log,
-    load_followers_list,
 )
-from instagram_api import InstagramAPI, load_token_data, save_token_data
+from instagram_api import load_token_data, save_token_data
 from mercadolivre import (
     extract_product_data,
-    format_instagram_caption,
     format_whatsapp_message,
     generate_affiliate_link,
     scrape_offers,
@@ -85,7 +83,6 @@ class App(ctk.CTk):
         self._bot: InstagramBot | None = None
         self._chrome_process = None
         self._running = False
-        self._api: InstagramAPI | None = None
         self._android: AndroidStoryPoster | None = None
         self._scraper_page = None  # Playwright headless page pra scraping ML
         self._scraper_pw = None
@@ -100,7 +97,6 @@ class App(ctk.CTk):
         self._worker.start()
 
         self._build_ui()
-        self._try_load_saved_token()
 
         # Conecta Android (emulador) automaticamente ao abrir o app.
         # O bot (Chrome/Playwright) NÃO conecta mais automaticamente —
@@ -178,15 +174,11 @@ class App(ctk.CTk):
 
         self.tab_bot = self.tabview.add("Bot de Follow")
         self.tab_unfollow = self.tabview.add("Limpar Desumildes")
-        self.tab_hide_story = self.tabview.add("Ocultar Stories")
         self.tab_offers = self.tabview.add("Radar de Ofertas")
-        self.tab_dashboard = self.tabview.add("Dashboard de Métricas")
 
         self._build_bot_tab()
         self._build_unfollow_tab()
-        self._build_hide_story_tab()
         self._build_offers_tab()
-        self._build_dashboard_tab()
 
     def _build_bot_tab(self) -> None:
         """Constrói a aba do bot de follow."""
@@ -465,153 +457,7 @@ class App(ctk.CTk):
             text = f"{count} follows registrados no histórico."
         self.follow_count_label.configure(text=text)
 
-    # ── Aba Ocultar Stories ──────────────────────────────────────────────
-
-    def _build_hide_story_tab(self) -> None:
-        """Constrói a aba de ocultar stories de seguidores."""
-        tab = self.tab_hide_story
-
-        # ── Título ────────────────────────────────────────────────────────
-        ctk.CTkLabel(
-            tab,
-            text="Ocultar Stories",
-            font=ctk.CTkFont(size=18, weight="bold"),
-        ).pack(pady=(10, 2))
-
-        ctk.CTkLabel(
-            tab,
-            text="Oculta seus stories de todos, exceto o perfil escolhido",
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
-        ).pack(pady=(0, 8))
-
-        # ── Configuração ──────────────────────────────────────────────────
-        config_frame = ctk.CTkFrame(tab)
-        config_frame.pack(padx=10, pady=(0, 8), fill="x")
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Seu @ (sem @):",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
-
-        self.hide_story_my_user_entry = ctk.CTkEntry(
-            config_frame, placeholder_text="ex: seu_usuario", width=250
-        )
-        self.hide_story_my_user_entry.grid(
-            row=0, column=1, padx=12, pady=(12, 4), sticky="w"
-        )
-
-        # Auto-preencher username
-        saved = load_token_data()
-        if saved and saved.get("username"):
-            self.hide_story_my_user_entry.insert(0, saved["username"])
-
-        ctk.CTkLabel(
-            config_frame,
-            text="@ permitido (quem PODE ver):",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=1, column=0, padx=12, pady=4, sticky="w")
-
-        self.allowed_user_entry = ctk.CTkEntry(
-            config_frame, placeholder_text="ex: perfil_teste", width=250
-        )
-        self.allowed_user_entry.grid(
-            row=1, column=1, padx=12, pady=4, sticky="w"
-        )
-        # Pré-preenchido com o perfil de teste (pode alterar livremente).
-        self.allowed_user_entry.insert(0, "leferreira_99")
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Apenas este perfil verá seus stories. Todos os outros serão ocultados.",
-            font=ctk.CTkFont(size=11),
-            text_color="#FF9800",
-        ).grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 12), sticky="w")
-
-        # ── Info do cache de seguidores ──────────────────────────────────
-        self.followers_cache_label = ctk.CTkLabel(
-            tab,
-            text="",
-            font=ctk.CTkFont(size=12),
-            text_color="#4CAF50",
-        )
-        self.followers_cache_label.pack(pady=(0, 4))
-        self._update_followers_cache_label()
-
-        # ── Botões ────────────────────────────────────────────────────────
-        btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        btn_frame.pack(padx=10, pady=(0, 4), fill="x")
-
-        self.hide_story_connect_btn = ctk.CTkButton(
-            btn_frame,
-            text="1. Conectar Bot",
-            command=self._on_connect_bot,
-            width=150,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="#FF9800",
-            hover_color="#F57C00",
-        )
-        self.hide_story_connect_btn.pack(side="left", padx=(0, 6))
-
-        self.hide_story_btn = ctk.CTkButton(
-            btn_frame,
-            text="2. Ocultar Stories",
-            command=self._on_hide_story,
-            width=170,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
-            fg_color="#9C27B0",
-            hover_color="#7B1FA2",
-        )
-        self.hide_story_btn.pack(side="left", padx=(0, 6))
-
-        self.unhide_story_btn = ctk.CTkButton(
-            btn_frame,
-            text="Desocultar",
-            command=self._on_unhide_story,
-            width=120,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
-            fg_color="#4CAF50",
-            hover_color="#388E3C",
-        )
-        self.unhide_story_btn.pack(side="left", padx=(0, 6))
-
-        self.recollect_btn = ctk.CTkButton(
-            btn_frame,
-            text="Recolectar",
-            command=self._on_recollect_followers,
-            width=120,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
-            fg_color="#2196F3",
-            hover_color="#1976D2",
-        )
-        self.recollect_btn.pack(side="left", padx=(0, 6))
-
-        self.hide_story_stop_btn = ctk.CTkButton(
-            btn_frame,
-            text="Parar",
-            command=self._on_stop,
-            width=70,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
-            fg_color="#F44336",
-            hover_color="#D32F2F",
-        )
-        self.hide_story_stop_btn.pack(side="left")
-
-        # ── Log ──────────────────────────────────────────────────────────
-        self.hide_story_log_box = ctk.CTkTextbox(
-            tab, width=660, height=200, state="disabled"
-        )
-        self.hide_story_log_box.pack(padx=10, pady=(8, 10))
+    # ── Aba Radar de Ofertas ─────────────────────────────────────────────
 
     def _build_offers_tab(self) -> None:
         """Constrói a aba do Radar de Ofertas (ML → Instagram)."""
@@ -752,18 +598,6 @@ class App(ctk.CTk):
         )
         self.post_selected_btn.pack(side="left", padx=(0, 6))
 
-        self.post_story_bg_btn = ctk.CTkButton(
-            btn_frame,
-            text="Postar Story (Fundo)",
-            command=self._on_post_story_bg,
-            width=160,
-            height=36,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#9C27B0",
-            hover_color="#7B1FA2",
-        )
-        self.post_story_bg_btn.pack(side="left", padx=(0, 6))
-
         self.auto_post_btn = ctk.CTkButton(
             btn_frame,
             text="Auto-Postar Tudo",
@@ -834,25 +668,6 @@ class App(ctk.CTk):
         )
         self.android_diag_btn.grid(row=0, column=3, padx=4, pady=6)
 
-        # ── Tipo de postagem ─────────────────────────────────────────────
-        post_type_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        post_type_frame.pack(padx=10, pady=(0, 2), fill="x")
-
-        ctk.CTkLabel(
-            post_type_frame, text="Postar como:",
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 8))
-
-        self.post_type_var = ctk.StringVar(value="story")
-        ctk.CTkRadioButton(
-            post_type_frame, text="Feed",
-            variable=self.post_type_var, value="feed",
-        ).pack(side="left", padx=(0, 12))
-        ctk.CTkRadioButton(
-            post_type_frame, text="Story",
-            variable=self.post_type_var, value="story",
-        ).pack(side="left")
-
         # ── Ofertas (esquerda) + Log (direita), lado a lado ───────────────
         panes = ctk.CTkFrame(tab, fg_color="transparent")
         panes.pack(padx=10, pady=(4, 8), fill="both", expand=True)
@@ -894,236 +709,6 @@ class App(ctk.CTk):
         self._offers_list: list[dict] = []
         self._selected_offer_idx: int = -1
 
-    def _build_dashboard_tab(self) -> None:
-        """Constrói a aba do dashboard de métricas."""
-        tab = self.tab_dashboard
-
-        # ── Token de acesso ──────────────────────────────────────────────
-        token_frame = ctk.CTkFrame(tab)
-        token_frame.pack(padx=10, pady=(5, 8), fill="x")
-
-        ctk.CTkLabel(
-            token_frame,
-            text="Access Token do Meta:",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=0, column=0, padx=12, pady=(12, 4), sticky="w")
-
-        self.token_entry = ctk.CTkEntry(
-            token_frame, placeholder_text="Cole seu token aqui", width=400, show="*"
-        )
-        self.token_entry.grid(row=0, column=1, padx=12, pady=(12, 4), sticky="w")
-
-        # Status do token
-        self.token_status_label = ctk.CTkLabel(
-            token_frame,
-            text="Nenhum token salvo",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        )
-        self.token_status_label.grid(
-            row=1, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="w"
-        )
-
-        # Token longa duração
-        long_token_frame = ctk.CTkFrame(token_frame, fg_color="transparent")
-        long_token_frame.grid(
-            row=2, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="w"
-        )
-
-        ctk.CTkLabel(
-            long_token_frame,
-            text="App ID:",
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left", padx=(0, 4))
-
-        self.app_id_entry = ctk.CTkEntry(
-            long_token_frame, placeholder_text="ID do App", width=140
-        )
-        self.app_id_entry.pack(side="left", padx=(0, 8))
-
-        ctk.CTkLabel(
-            long_token_frame,
-            text="App Secret:",
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left", padx=(0, 4))
-
-        self.app_secret_entry = ctk.CTkEntry(
-            long_token_frame, placeholder_text="Secret do App", width=140, show="*"
-        )
-        self.app_secret_entry.pack(side="left", padx=(0, 8))
-
-        self.long_token_btn = ctk.CTkButton(
-            long_token_frame,
-            text="Gerar Token 60 dias",
-            command=self._on_exchange_token,
-            width=140,
-            height=28,
-            font=ctk.CTkFont(size=11),
-            fg_color="#FF9800",
-            hover_color="#F57C00",
-            state="disabled",
-        )
-        self.long_token_btn.pack(side="left")
-
-        help_label = ctk.CTkLabel(
-            token_frame,
-            text="Token salvo localmente. App ID/Secret em: Configurações > Básico no painel do Meta",
-            font=ctk.CTkFont(size=10),
-            text_color="#2196F3",
-        )
-        help_label.grid(
-            row=3, column=0, columnspan=2, padx=12, pady=(0, 10), sticky="w"
-        )
-
-        # ── Botões do dashboard ──────────────────────────────────────────
-        dash_btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        dash_btn_frame.pack(padx=10, pady=(0, 8), fill="x")
-
-        self.connect_api_btn = ctk.CTkButton(
-            dash_btn_frame,
-            text="Conectar à API",
-            command=self._on_connect_api,
-            width=140,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="#2196F3",
-            hover_color="#1976D2",
-        )
-        self.connect_api_btn.pack(side="left", padx=(0, 8))
-
-        self.refresh_btn = ctk.CTkButton(
-            dash_btn_frame,
-            text="Atualizar Métricas",
-            command=self._on_refresh_metrics,
-            width=140,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
-            fg_color="#4CAF50",
-            hover_color="#388E3C",
-        )
-        self.refresh_btn.pack(side="left", padx=(0, 8))
-
-        self.history_btn = ctk.CTkButton(
-            dash_btn_frame,
-            text="Ver Histórico",
-            command=self._on_show_history,
-            width=120,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            state="disabled",
-        )
-        self.history_btn.pack(side="left", padx=(0, 8))
-
-        self.clear_token_btn = ctk.CTkButton(
-            dash_btn_frame,
-            text="Limpar Token",
-            command=self._on_clear_token,
-            width=110,
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="#757575",
-            hover_color="#616161",
-        )
-        self.clear_token_btn.pack(side="left")
-
-        # ── Cards de métricas ────────────────────────────────────────────
-        cards_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        cards_frame.pack(padx=10, pady=(0, 8), fill="x")
-
-        self.card_followers = self._create_metric_card(
-            cards_frame, "Seguidores", "---", "#4CAF50"
-        )
-        self.card_followers.pack(side="left", padx=(0, 8), expand=True, fill="x")
-
-        self.card_following = self._create_metric_card(
-            cards_frame, "Seguindo", "---", "#2196F3"
-        )
-        self.card_following.pack(side="left", padx=(0, 8), expand=True, fill="x")
-
-        self.card_posts = self._create_metric_card(
-            cards_frame, "Posts", "---", "#FF9800"
-        )
-        self.card_posts.pack(side="left", padx=(0, 8), expand=True, fill="x")
-
-        self.card_change = self._create_metric_card(
-            cards_frame, "Variação", "---", "#9C27B0"
-        )
-        self.card_change.pack(side="left", expand=True, fill="x")
-
-        # ── Info do perfil ───────────────────────────────────────────────
-        self.profile_info_label = ctk.CTkLabel(
-            tab,
-            text="Conecte à API para ver métricas do seu perfil",
-            font=ctk.CTkFont(size=13),
-            text_color="gray",
-        )
-        self.profile_info_label.pack(pady=(4, 4))
-
-        # ── Log do dashboard ────────────────────────────────────────────
-        self.dash_log = ctk.CTkTextbox(tab, width=660, height=110, state="disabled")
-        self.dash_log.pack(padx=10, pady=(0, 10))
-
-    def _create_metric_card(
-        self, parent, title: str, value: str, color: str
-    ) -> ctk.CTkFrame:
-        """Cria um card de métrica para o dashboard."""
-        card = ctk.CTkFrame(parent, corner_radius=10)
-
-        ctk.CTkLabel(
-            card,
-            text=title,
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).pack(pady=(10, 0))
-
-        label = ctk.CTkLabel(
-            card,
-            text=value,
-            font=ctk.CTkFont(size=24, weight="bold"),
-            text_color=color,
-        )
-        label.pack(pady=(0, 10))
-
-        card._value_label = label
-        return card
-
-    def _update_card(self, card: ctk.CTkFrame, value: str) -> None:
-        """Atualiza o valor exibido em um card de métrica."""
-        card._value_label.configure(text=value)
-
-    # ── Token persistence ────────────────────────────────────────────────
-
-    def _try_load_saved_token(self) -> None:
-        """Tenta carregar token salvo anteriormente."""
-        token_data = load_token_data()
-        if not token_data:
-            return
-
-        token = token_data.get("access_token", "")
-        if not token:
-            return
-
-        self.token_entry.insert(0, token)
-
-        is_long = token_data.get("is_long_lived", False)
-        created = token_data.get("created_at", "")[:19].replace("T", " ")
-        ig_user_id = token_data.get("ig_user_id", "")
-
-        if is_long:
-            status = f"Token de longa duração salvo ({created})"
-            color = "#4CAF50"
-        else:
-            status = f"Token salvo ({created}) — gere um de longa duração!"
-            color = "#FF9800"
-
-        self.token_status_label.configure(text=status, text_color=color)
-
-        # Auto-conectar se tiver IG User ID salvo
-        if ig_user_id:
-            self._api = InstagramAPI(access_token=token, ig_user_id=ig_user_id)
-            self._safe_dash_log("Token salvo encontrado! Clique 'Conectar à API' para carregar métricas.")
-
     # ── Callbacks ────────────────────────────────────────────────────────
 
     def _append_log(self, msg: str) -> None:
@@ -1134,15 +719,6 @@ class App(ctk.CTk):
 
     def _safe_log(self, msg: str) -> None:
         self.after(0, self._append_log, msg)
-
-    def _append_dash_log(self, msg: str) -> None:
-        self.dash_log.configure(state="normal")
-        self.dash_log.insert("end", msg + "\n")
-        self.dash_log.see("end")
-        self.dash_log.configure(state="disabled")
-
-    def _safe_dash_log(self, msg: str) -> None:
-        self.after(0, self._append_dash_log, msg)
 
     def _append_unfollow_log(self, msg: str) -> None:
         self.unfollow_log_box.configure(state="normal")
@@ -1225,9 +801,6 @@ class App(ctk.CTk):
                 self.after(0, lambda: self.start_btn.configure(state="normal"))
                 self.after(0, lambda: self.connect_btn.configure(state="normal"))
                 self.after(0, lambda: self.unfollow_btn.configure(state="normal"))
-                self.after(0, lambda: self.hide_story_btn.configure(state="normal"))
-                self.after(0, lambda: self.unhide_story_btn.configure(state="normal"))
-                self.after(0, lambda: self.recollect_btn.configure(state="normal"))
 
             except Exception as exc:
                 self._safe_log(f"Erro ao conectar: {exc}")
@@ -1526,10 +1099,8 @@ class App(ctk.CTk):
             self._bot.request_stop()
             self._safe_log("Parando... aguarde a ação atual finalizar.")
             self._safe_unfollow_log("Parando... aguarde a ação atual finalizar.")
-            self._safe_hide_story_log("Parando... aguarde a ação atual finalizar.")
         self.stop_btn.configure(state="disabled")
         self.unfollow_stop_btn.configure(state="disabled")
-        self.hide_story_stop_btn.configure(state="disabled")
 
     def _reset_buttons(self) -> None:
         self.start_btn.configure(state="normal")
@@ -1539,150 +1110,6 @@ class App(ctk.CTk):
         self.unfollow_btn.configure(state="normal")
         self.unfollow_stop_btn.configure(state="disabled")
         self.unfollow_connect_btn.configure(state="normal")
-        self.hide_story_btn.configure(state="normal")
-        self.unhide_story_btn.configure(state="normal")
-        self.hide_story_stop_btn.configure(state="disabled")
-        self.hide_story_connect_btn.configure(state="normal")
-        self.recollect_btn.configure(state="normal")
-
-    def _update_followers_cache_label(self) -> None:
-        """Atualiza o label mostrando quantos seguidores estão no cache."""
-        cached = load_followers_list()
-        if cached:
-            text = f"{len(cached)} seguidores no cache. Pronto para ocultar!"
-        else:
-            text = (
-                "Nenhum seguidor no cache. "
-                "Clique em 'Ocultar Stories' para coletar."
-            )
-        self.followers_cache_label.configure(text=text)
-
-    # ── Ocultar Stories callbacks ───────────────────────────────────────
-
-    def _append_hide_story_log(self, msg: str) -> None:
-        self.hide_story_log_box.configure(state="normal")
-        self.hide_story_log_box.insert("end", msg + "\n")
-        self.hide_story_log_box.see("end")
-        self.hide_story_log_box.configure(state="disabled")
-
-    def _safe_hide_story_log(self, msg: str) -> None:
-        self.after(0, self._append_hide_story_log, msg)
-
-    def _on_hide_story(self) -> None:
-        """Oculta stories de todos exceto o perfil permitido."""
-        my_user = (
-            self.hide_story_my_user_entry.get().strip().lstrip("@").strip("/")
-        )
-        allowed = (
-            self.allowed_user_entry.get().strip().lstrip("@").strip("/")
-        )
-
-        if not my_user:
-            self._append_hide_story_log("Preencha seu @ (nome de usuário)!")
-            return
-
-        if not allowed:
-            self._append_hide_story_log(
-                "Preencha o @ do perfil que PODE ver seus stories!"
-            )
-            return
-
-        if not self._bot:
-            self._append_hide_story_log(
-                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
-            )
-            return
-
-        self._bot._stop_requested = False
-        self._bot.on_log = self._safe_hide_story_log
-        self.hide_story_btn.configure(state="disabled")
-        self.unhide_story_btn.configure(state="disabled")
-        self.hide_story_stop_btn.configure(state="normal")
-        self.hide_story_connect_btn.configure(state="disabled")
-        self._running = True
-
-        def _task():
-            try:
-                self._bot.hide_story_via_settings(
-                    allowed_username=allowed,
-                    my_username=my_user,
-                )
-            except Exception as exc:
-                self._safe_hide_story_log(f"Erro: {exc}")
-            finally:
-                self._running = False
-                self._bot.on_log = self._safe_log
-                self.after(0, self._reset_buttons)
-                self.after(0, self._update_followers_cache_label)
-
-        self._submit_task(_task)
-
-    def _on_unhide_story(self) -> None:
-        """Remove ocultação de stories de todos os seguidores."""
-        if not self._bot:
-            self._append_hide_story_log(
-                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
-            )
-            return
-
-        self._bot._stop_requested = False
-        self._bot.on_log = self._safe_hide_story_log
-        self.hide_story_btn.configure(state="disabled")
-        self.unhide_story_btn.configure(state="disabled")
-        self.hide_story_stop_btn.configure(state="normal")
-        self.hide_story_connect_btn.configure(state="disabled")
-        self._running = True
-
-        my_user = (
-            self.hide_story_my_user_entry.get().strip().lstrip("@").strip("/")
-        )
-
-        def _task():
-            try:
-                self._bot.unhide_story_from_all(my_username=my_user)
-            except Exception as exc:
-                self._safe_hide_story_log(f"Erro: {exc}")
-            finally:
-                self._running = False
-                self._bot.on_log = self._safe_log
-                self.after(0, self._reset_buttons)
-
-        self._submit_task(_task)
-
-    def _on_recollect_followers(self) -> None:
-        """Força a recoleta dos seguidores do Instagram."""
-        if not self._bot:
-            self._append_hide_story_log(
-                "Bot não conectado! Clique em 'Conectar Bot' primeiro."
-            )
-            return
-
-        my_user = (
-            self.hide_story_my_user_entry.get().strip().lstrip("@").strip("/")
-        )
-        if not my_user:
-            self._append_hide_story_log("Preencha seu @ (nome de usuário)!")
-            return
-
-        self._bot._stop_requested = False
-        self._bot.on_log = self._safe_hide_story_log
-        self.recollect_btn.configure(state="disabled")
-        self.hide_story_stop_btn.configure(state="normal")
-        self._running = True
-
-        def _task():
-            try:
-                self._bot._collect_followers(my_user)
-                self._safe_hide_story_log("Lista de seguidores atualizada!")
-            except Exception as exc:
-                self._safe_hide_story_log(f"Erro: {exc}")
-            finally:
-                self._running = False
-                self._bot.on_log = self._safe_log
-                self.after(0, self._reset_buttons)
-                self.after(0, self._update_followers_cache_label)
-
-        self._submit_task(_task)
 
     # ── Ofertas callbacks ─────────────────────────────────────────────────
 
@@ -2176,14 +1603,10 @@ class App(ctk.CTk):
         return product_url
 
     def _post_product_to_instagram(self, product: dict) -> bool:
-        """Posta um produto no Instagram. Retorna True se OK."""
-        post_type = self.post_type_var.get()
-        # Story com sticker vai pelo Android (emulador LDPlayer).
-        has_story_engine = self._android or self._bot
-        if not self._api and not (post_type == "story" and has_story_engine):
+        """Posta um produto no Instagram via Android (LDPlayer). Retorna True se OK."""
+        if not self._android:
             self._safe_offers_log(
-                "Conecte o Android (LDPlayer) ou configure o token "
-                "da API na aba Dashboard."
+                "Conecte o Android (LDPlayer) primeiro!"
             )
             return False
 
@@ -2195,127 +1618,40 @@ class App(ctk.CTk):
             return False
 
         affiliate_link = self._resolve_affiliate_link(product)
-
         title = product.get("title", "")[:50]
 
         try:
-            if post_type == "story":
-                self._safe_offers_log(f"Montando story: {title}...")
-                # Compõe imagem SEM link em texto (o link vai no sticker).
-                build_story_image(
-                    STORY_BG_PATH,
-                    STORY_OUT_PATH,
-                    product_image_url=image_url,
-                    link="",
-                    font_regular=FONT_REGULAR,
-                    font_bold=FONT_BOLD,
-                )
-
-                # ── Prioridade 1: Android (app real, sticker clicável) ──
-                if self._android is not None:
-                    self._safe_offers_log(
-                        "Postando story via app Android (sticker de link)..."
-                    )
-                    res = self._android.post_story(
-                        STORY_OUT_PATH, link=affiliate_link
-                    )
-                    if res.get("ok"):
-                        self._safe_offers_log(
-                            "Story com sticker de link publicado (Android)!"
-                        )
-                        return True
-                    self._safe_offers_log(
-                        "Falha no story via Android "
-                        f"(passo: {res.get('step')}, "
-                        f"detalhe: {res.get('detail')}). "
-                        "Tentando reserva..."
-                    )
-
-                # ── Prioridade 2: Navegador web (bot/CDP emulando mobile)
-                elif self._bot is not None:
-                    res = self._bot.post_story_web(
-                        STORY_OUT_PATH, link=affiliate_link
-                    )
-                    if res.get("ok"):
-                        self._safe_offers_log(
-                            "Story com sticker de link publicado (web)!"
-                        )
-                        return True
-                    self._safe_offers_log(
-                        "Falha no story via navegador "
-                        f"(passo: {res.get('step')}). Tentando reserva..."
-                    )
-
-                else:
-                    self._safe_offers_log(
-                        "Sem Android nem Bot conectados — sem sticker. "
-                        "Conecte o Android ou Bot. "
-                        "Publicando via API (link em texto) por enquanto."
-                    )
-
-                # ── Reserva: API (sem sticker, link em texto na imagem) ──
-                if not self._api:
-                    self._safe_offers_log(
-                        "Sem API para a reserva. Configure o token na aba "
-                        "Dashboard ou me envie o log acima p/ ajustar."
-                    )
-                    return False
-                build_story_image(
-                    STORY_BG_PATH,
-                    STORY_OUT_PATH,
-                    product_image_url=image_url,
-                    link=display_link(affiliate_link),
-                    font_regular=FONT_REGULAR,
-                    font_bold=FONT_BOLD,
-                )
-                self._safe_offers_log(f"Postando story (reserva): {title}...")
-                result = self._api.publish_story_image(STORY_OUT_PATH)
-            else:
-                caption = format_instagram_caption(product, affiliate_link)
-                self._safe_offers_log(f"Postando no feed: {title}...")
-                result = self._api.publish_feed_post(image_url, caption)
-
-            media_id = result.get("id", "")
-            self._safe_offers_log(
-                f"Publicado! ID: {media_id}"
+            self._safe_offers_log(f"Montando story: {title}...")
+            build_story_image(
+                STORY_BG_PATH,
+                STORY_OUT_PATH,
+                product_image_url=image_url,
+                link="",
+                font_regular=FONT_REGULAR,
+                font_bold=FONT_BOLD,
             )
-            return True
+
+            self._safe_offers_log(
+                "Postando story via app Android (sticker de link)..."
+            )
+            res = self._android.post_story(
+                STORY_OUT_PATH, link=affiliate_link
+            )
+            if res.get("ok"):
+                self._safe_offers_log(
+                    "Story com sticker de link publicado (Android)!"
+                )
+                return True
+
+            self._safe_offers_log(
+                "Falha no story via Android "
+                f"(passo: {res.get('step')}, "
+                f"detalhe: {res.get('detail')})."
+            )
+            return False
         except Exception as exc:
             self._safe_offers_log(f"Erro ao postar: {exc}")
             return False
-
-    def _on_post_story_bg(self) -> None:
-        """Publica apenas o fundo do Radar das Promos como story (tela cheia)."""
-        if not self._api:
-            self._append_offers_log(
-                "API não conectada! Configure o token na aba Dashboard."
-            )
-            return
-
-        if not os.path.isfile(STORY_BG_PATH):
-            self._append_offers_log(
-                f"Imagem de fundo não encontrada: {STORY_BG_PATH}"
-            )
-            return
-
-        self.post_story_bg_btn.configure(state="disabled")
-
-        def _post():
-            try:
-                self._safe_offers_log("Publicando story (fundo)...")
-                result = self._api.publish_story_image(STORY_BG_PATH)
-                self._safe_offers_log(
-                    f"Story publicado! ID: {result.get('id', '')}"
-                )
-            except Exception as exc:
-                self._safe_offers_log(f"Erro ao publicar story: {exc}")
-            finally:
-                self.after(
-                    0,
-                    lambda: self.post_story_bg_btn.configure(state="normal"),
-                )
-
-        threading.Thread(target=_post, daemon=True).start()
 
     def _on_post_selected(self) -> None:
         """Posta o produto selecionado no Instagram."""
@@ -2347,9 +1683,9 @@ class App(ctk.CTk):
             self._append_offers_log("Busque ofertas primeiro!")
             return
 
-        if not self._api:
+        if not self._android:
             self._append_offers_log(
-                "API não conectada! Configure o token na aba Dashboard."
+                "Conecte o Android (LDPlayer) primeiro!"
             )
             return
 
@@ -2409,219 +1745,6 @@ class App(ctk.CTk):
         self.clipboard_clear()
         self.clipboard_append(msg)
         self._append_offers_log("Mensagem copiada para a área de transferência!")
-
-    # ── Dashboard callbacks ──────────────────────────────────────────────
-
-    def _on_connect_api(self) -> None:
-        """Conecta à Instagram Graph API com o token fornecido."""
-        token = self.token_entry.get().strip()
-        if not token:
-            self._safe_dash_log("Cole o Access Token do Meta para conectar.")
-            return
-
-        self.connect_api_btn.configure(state="disabled")
-        self._safe_dash_log("Conectando à API do Instagram...")
-
-        def _connect():
-            try:
-                self._api = InstagramAPI(access_token=token)
-                ig_user_id = self._api.discover_user_id()
-                self._safe_dash_log(f"Conectado! IG User ID: {ig_user_id}")
-
-                # Salvar token localmente
-                self._api.save_current_token()
-                self._safe_dash_log("Token salvo localmente!")
-
-                self.after(0, lambda: self.token_status_label.configure(
-                    text="Token salvo com sucesso!",
-                    text_color="#4CAF50",
-                ))
-
-                metrics = self._api.record_metrics()
-                self._display_metrics(metrics)
-
-                # Preencher @ automaticamente na aba Limpar Desumildes
-                username = metrics.get("username", "")
-                if username:
-                    self.after(0, self._set_username_entry, username)
-
-                self.after(0, lambda: self.refresh_btn.configure(state="normal"))
-                self.after(0, lambda: self.history_btn.configure(state="normal"))
-                self.after(0, lambda: self.long_token_btn.configure(state="normal"))
-                self._safe_dash_log("Métricas carregadas com sucesso!")
-
-            except Exception as exc:
-                self._safe_dash_log(f"Erro: {exc}")
-                self.after(0, lambda: self.connect_api_btn.configure(state="normal"))
-
-        threading.Thread(target=_connect, daemon=True).start()
-
-    def _on_exchange_token(self) -> None:
-        """Troca o token por um de longa duração (60 dias)."""
-        if not self._api:
-            self._safe_dash_log("Conecte à API primeiro.")
-            return
-
-        app_id = self.app_id_entry.get().strip()
-        app_secret = self.app_secret_entry.get().strip()
-
-        if not app_id or not app_secret:
-            self._safe_dash_log(
-                "Preencha o App ID e App Secret. "
-                "Encontre em: Painel do Meta > Configurações > Básico"
-            )
-            return
-
-        self.long_token_btn.configure(state="disabled")
-        self._safe_dash_log("Trocando por token de longa duração...")
-
-        def _exchange():
-            try:
-                result = self._api.exchange_for_long_lived_token(app_id, app_secret)
-                already = result.get("already_long_lived", False)
-                expires_days = result.get("expires_in", 0) // 86400
-
-                if already:
-                    msg = (
-                        "Seu token já é de longa duração (60 dias)! "
-                        "Salvo localmente. Use 'Renovar' quando "
-                        "estiver perto de expirar."
-                    )
-                else:
-                    msg = (
-                        f"Token de longa duração gerado! "
-                        f"Válido por {expires_days} dias."
-                    )
-                    self.after(
-                        0, self._update_token_display, result["access_token"]
-                    )
-
-                self._safe_dash_log(msg)
-                self.after(0, lambda: self.token_status_label.configure(
-                    text=f"Token de longa duração ({expires_days} dias)",
-                    text_color="#4CAF50",
-                ))
-
-            except Exception as exc:
-                self._safe_dash_log(f"Erro ao trocar token: {exc}")
-            finally:
-                self.after(0, lambda: self.long_token_btn.configure(state="normal"))
-
-        threading.Thread(target=_exchange, daemon=True).start()
-
-    def _update_token_display(self, new_token: str) -> None:
-        """Atualiza o campo de token na UI."""
-        self.token_entry.delete(0, "end")
-        self.token_entry.insert(0, new_token)
-
-    def _on_clear_token(self) -> None:
-        """Limpa o token salvo."""
-        from instagram_api import clear_token_data
-
-        clear_token_data()
-        self.token_entry.delete(0, "end")
-        self._api = None
-        self.token_status_label.configure(
-            text="Token removido", text_color="gray"
-        )
-        self.refresh_btn.configure(state="disabled")
-        self.history_btn.configure(state="disabled")
-        self.long_token_btn.configure(state="disabled")
-        self.connect_api_btn.configure(state="normal")
-        self._safe_dash_log("Token limpo. Cole um novo token para conectar.")
-
-    def _on_refresh_metrics(self) -> None:
-        """Atualiza as métricas do perfil."""
-        if not self._api:
-            self._safe_dash_log("Conecte à API primeiro.")
-            return
-
-        self.refresh_btn.configure(state="disabled")
-        self._safe_dash_log("Atualizando métricas...")
-
-        def _refresh():
-            try:
-                metrics = self._api.record_metrics()
-                self._display_metrics(metrics)
-                self._safe_dash_log("Métricas atualizadas!")
-            except Exception as exc:
-                self._safe_dash_log(f"Erro ao atualizar: {exc}")
-            finally:
-                self.after(0, lambda: self.refresh_btn.configure(state="normal"))
-
-        threading.Thread(target=_refresh, daemon=True).start()
-
-    def _on_show_history(self) -> None:
-        """Mostra o histórico de métricas."""
-        if not self._api:
-            return
-
-        change_data = self._api.get_followers_change()
-        history = self._api.get_history()
-
-        self._safe_dash_log("=" * 50)
-        self._safe_dash_log(f"Histórico de métricas ({change_data['records']} registros)")
-        self._safe_dash_log("-" * 50)
-
-        if change_data["records"] >= 2:
-            sign = "+" if change_data["change"] >= 0 else ""
-            self._safe_dash_log(
-                f"Última variação: {sign}{change_data['change']} seguidores"
-            )
-            total_sign = "+" if change_data.get("total_change", 0) >= 0 else ""
-            self._safe_dash_log(
-                f"Variação total: {total_sign}{change_data.get('total_change', 0)} seguidores"
-            )
-            self._safe_dash_log(
-                f"Desde: {change_data.get('first_record', 'N/A')}"
-            )
-
-        self._safe_dash_log("-" * 50)
-
-        for entry in history[-10:]:
-            ts = entry.get("timestamp", "")[:19].replace("T", " ")
-            followers = entry.get("followers_count", 0)
-            following = entry.get("follows_count", 0)
-            self._safe_dash_log(f"  {ts} | Seg: {followers} | Sdo: {following}")
-
-        if len(history) > 10:
-            self._safe_dash_log(f"  ... e mais {len(history) - 10} registros anteriores")
-
-        self._safe_dash_log("=" * 50)
-
-    def _display_metrics(self, metrics: dict) -> None:
-        """Atualiza os cards e labels com as métricas."""
-        def _update():
-            self._update_card(
-                self.card_followers,
-                f"{metrics.get('followers_count', 0):,}".replace(",", "."),
-            )
-            self._update_card(
-                self.card_following,
-                f"{metrics.get('follows_count', 0):,}".replace(",", "."),
-            )
-            self._update_card(
-                self.card_posts,
-                f"{metrics.get('media_count', 0):,}".replace(",", "."),
-            )
-
-            change_data = self._api.get_followers_change()
-            if change_data["records"] >= 2:
-                change = change_data["change"]
-                sign = "+" if change >= 0 else ""
-                self._update_card(self.card_change, f"{sign}{change}")
-            else:
-                self._update_card(self.card_change, "---")
-
-            username = metrics.get("username", "")
-            name = metrics.get("name", "")
-            if username:
-                self.profile_info_label.configure(
-                    text=f"@{username} — {name}",
-                    text_color="white",
-                )
-
-        self.after(0, _update)
 
     # ── Helpers de config ────────────────────────────────────────────────
 
