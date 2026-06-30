@@ -1204,7 +1204,7 @@ class AndroidStoryPoster:
                 f"-d 'https://www.instagram.com/{username}/' "
                 f"-p {IG_PKG}"
             )
-            time.sleep(3)
+            time.sleep(2)
             return True
         except Exception as exc:
             self._log(f"  Erro ao abrir perfil @{username}: {exc}")
@@ -1286,9 +1286,9 @@ class AndroidStoryPoster:
         stale_rounds = 0
         iteration = 0
 
-        # Esperar a lista carregar (até 8 segundos)
+        # Esperar a lista carregar (até 4 segundos)
         self._log("  Aguardando lista carregar...")
-        for _ in range(4):
+        for _ in range(2):
             time.sleep(2)
             try:
                 dump = self.d.dump_hierarchy()
@@ -1321,10 +1321,10 @@ class AndroidStoryPoster:
                 stale_rounds = 0
                 self._log(f"  {len(all_users)} perfis coletados...")
 
-            # Scroll pra baixo
+            # Scroll pra baixo (rápido)
             w, h = self.d.window_size()
-            self.d.swipe(w // 2, int(h * 0.7), w // 2, int(h * 0.3), 0.3)
-            time.sleep(1.5)
+            self.d.swipe(w // 2, int(h * 0.7), w // 2, int(h * 0.3), 0.2)
+            time.sleep(0.8)
             iteration += 1
 
         return list(all_users)
@@ -1351,7 +1351,7 @@ class AndroidStoryPoster:
         self._log(f"Abrindo perfil @{my_username}...")
         if not self._open_profile(my_username):
             return []
-        time.sleep(4)
+        time.sleep(2)
 
         # Clicar em "Seguindo" / "Following" / "A seguir" (PT-PT)
         self._log("Abrindo lista de 'seguindo'...")
@@ -1383,7 +1383,7 @@ class AndroidStoryPoster:
             self._log("Não encontrei o botão 'seguindo'.")
             return []
 
-        time.sleep(4)
+        time.sleep(2)
         self._log("Coletando lista de 'seguindo'...")
         users = self._collect_list_from_sheet(stop_flag)
         users = [u for u in users if u != my_username.lower()]
@@ -1403,7 +1403,7 @@ class AndroidStoryPoster:
         self._log(f"Abrindo perfil @{my_username}...")
         if not self._open_profile(my_username):
             return []
-        time.sleep(4)
+        time.sleep(2)
 
         # Clicar em "Seguidores" / "Followers"
         self._log("Abrindo lista de seguidores...")
@@ -1432,7 +1432,7 @@ class AndroidStoryPoster:
             self._log("Não encontrei o botão 'seguidores'.")
             return []
 
-        time.sleep(4)
+        time.sleep(2)
         self._log("Coletando lista de seguidores...")
         users = self._collect_list_from_sheet(stop_flag)
         users = [u for u in users if u != my_username.lower()]
@@ -1451,7 +1451,7 @@ class AndroidStoryPoster:
         try:
             if not self._open_profile(username):
                 return False
-            time.sleep(2)
+            time.sleep(1.5)
 
             # Clicar em "Seguindo" / "Following" / "A seguir" (botão no perfil)
             clicked = False
@@ -1462,9 +1462,15 @@ class AndroidStoryPoster:
                     clicked = True
                     break
             if not clicked:
-                # Tentar por desc
                 for label in ["Seguindo", "Following", "A seguir"]:
-                    el = self.d(description=label, clickable=True)
+                    el = self.d(textContains=label, clickable=True)
+                    if el.exists:
+                        el.click()
+                        clicked = True
+                        break
+            if not clicked:
+                for label in ["Seguindo", "Following", "A seguir"]:
+                    el = self.d(descriptionContains=label, clickable=True)
                     if el.exists:
                         el.click()
                         clicked = True
@@ -1474,26 +1480,39 @@ class AndroidStoryPoster:
                 self.d.press("back")
                 return False
 
-            time.sleep(2)
+            time.sleep(1.5)
 
-            # Confirmar no popup: "Deixar de seguir" / "Unfollow"
+            # Confirmar no popup: vários idiomas
             confirmed = False
             for label in [
+                "N\u00e3o seguir", "N\u00e3o Seguir",
                 "Deixar de seguir", "Unfollow",
-                "Deixar de seguir", "Anular seguimento",
+                "Anular seguimento",
             ]:
                 el = self.d(textContains=label, clickable=True)
                 if el.exists:
                     el.click()
                     confirmed = True
                     break
+            if not confirmed:
+                # Tentar sem clickable (pode ser text dentro de botão)
+                for label in [
+                    "N\u00e3o seguir", "N\u00e3o Seguir",
+                    "Deixar de seguir", "Unfollow",
+                    "Anular seguimento",
+                ]:
+                    el = self.d(textContains=label)
+                    if el.exists:
+                        el.click()
+                        confirmed = True
+                        break
 
             if not confirmed:
                 self._log(f"  @{username}: popup de unfollow não apareceu.")
                 self.d.press("back")
                 return False
 
-            time.sleep(1)
+            time.sleep(0.5)
             self.d.press("back")
             return True
         except Exception as exc:

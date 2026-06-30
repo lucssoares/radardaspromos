@@ -1191,7 +1191,7 @@ class App(ctk.CTk):
                 else:
                     errors += 1
 
-                _time.sleep(random.uniform(3, 8))
+                _time.sleep(random.uniform(2, 4))
 
             log("=" * 50)
             log("Limpeza finalizada!")
